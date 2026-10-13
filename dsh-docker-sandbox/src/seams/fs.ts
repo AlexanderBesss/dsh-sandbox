@@ -98,15 +98,17 @@ export class DockerFileSystem extends FileSystem {
   }
 
   /**
-   * Resolve a path to a target. The workspace anchor is the explicit `cwd`
-   * when the caller names one (the web file API passes the session-header
-   * root), otherwise the initiating conversation's workspace; an absolute
-   * path with no conversation anchors on itself, so agentless reads of a
-   * named root still map.
+   * Resolve a path to a target. Inside a conversation the session's workspace
+   * is the root: in worktree mode it is the session's own checkout, and the
+   * caller's `cwd` - the app passes the session-header root, the checkout the
+   * worktree was carved from - resolves into it through the mapper's alias.
+   * Agentless calls (the web file API) have no session, so they keep
+   * anchoring on the explicit `cwd`; an absolute path with neither anchors on
+   * itself, so agentless reads of a named root still map.
    */
   private targetFor(path: string, cwd?: string): FsTarget {
     const session = this.trySession()
-    const anchor = cwd ?? session?.workspace ?? (isWindowsAbsolute(path) ? path : undefined)
+    const anchor = session?.workspace ?? cwd ?? (isWindowsAbsolute(path) ? path : undefined)
     if (anchor === undefined) {
       throw new SandboxSessionError(
         "this call is not running inside a conversation and names no working directory, so its path has no sandbox root",

@@ -77,6 +77,83 @@ describe.skipIf(posix)('DockerFileSystem.resolve', () => {
   })
 })
 
+describe.skipIf(posix)('DockerFileSystem in worktree mode', () => {
+  // The session's file tools must land in the session's worktree even though
+  // the app passes the session-header root (the main checkout) as `cwd`: the
+  // mapper's alias resolves that cwd into the worktree.
+  let wtFs: DockerFileSystem
+  let main = ''
+  let worktree = ''
+
+  beforeAll(async () => {
+    main = await mkdtemp(join(tmpdir(), 'dsh-fs-main-'))
+    worktree = await mkdtemp(join(tmpdir(), 'dsh-fs-wt-'))
+    const entry = {
+      sessionId: 'session-1',
+      mainWorkspace: main,
+      repoRoot: main,
+      worktreePath: worktree,
+      branch: 'dsh-sbx/session-1',
+      createdAt: 0,
+      hostGitDir: `${main}/.git/worktrees/session-1`,
+      gitConfig: {},
+    }
+    const paths = new PathMapper('workspace', '/workspace')
+    paths.registerExtraMount(worktree, {
+      mount: { hostPath: `${main}\\.git`, containerPath: PathMapper.windowsToDrive(`${main}\\.git`) },
+      containerGitDir: PathMapper.windowsToDrive(`${main}\\.git\\worktrees\\session-1`),
+      gitConfig: {},
+      aliasHost: main,
+    })
+    const ctx = {
+      agents: {
+        currentInitiator: () => ({ id: 'session-1', session: { id: 'session-1', header: { cwd: main } } }),
+      },
+      sessions: {
+        get: (id: string) => (id === 'session-1' ? { id, header: { cwd: main } } : undefined),
+      },
+    } as unknown as SandboxContext
+    wtFs = new DockerFileSystem(ctx, {
+      paths,
+      config: testConfig(),
+      worktrees: { ensure: () => entry, lookup: () => entry } as never,
+    })
+  })
+
+  afterAll(async () => {
+    await rm(main, { recursive: true, force: true })
+    await rm(worktree, { recursive: true, force: true })
+  })
+
+  it('routes a cwd-anchored write into the worktree, not the main checkout', () => {
+    const target = wtFs.resolve('package.json', { cwd: main })
+    expect(target.path).toBe('/workspace/package.json')
+    expect(target.hostPath).toBe(join(worktree, 'package.json'))
+  })
+
+  it('routes the main checkout spelled absolutely into the worktree', () => {
+    const viaMain = wtFs.resolve(`${main}\\package.json`)
+    const viaWorktree = wtFs.resolve(`${worktree}\\package.json`)
+    expect(viaMain.targetKey).toBe(viaWorktree.targetKey)
+    expect(viaMain.hostPath).toBe(join(worktree, 'package.json'))
+  })
+
+  it('still writes the main checkout directly when worktree mode is off', async () => {
+    // The same fs without a worktree entry: session.workspace is the main
+    // checkout, so edits land there (the documented shared-workspace mode).
+    const plain = new PathMapper('workspace', '/workspace')
+    const ctx = {
+      agents: {
+        currentInitiator: () => ({ id: 'session-1', session: { id: 'session-1', header: { cwd: main } } }),
+      },
+      sessions: { get: (id: string) => ({ id, header: { cwd: main } }) },
+    } as unknown as SandboxContext
+    const offFs = new DockerFileSystem(ctx, { paths: plain, config: testConfig() })
+    const target = offFs.resolve('package.json', { cwd: main })
+    expect(target.hostPath).toBe(join(main, 'package.json'))
+  })
+})
+
 describe.skipIf(posix)('DockerFileSystem reads and writes', () => {
   it('stats a real file with a size and a version token', async () => {
     await mkdir(host('src'), { recursive: true })
