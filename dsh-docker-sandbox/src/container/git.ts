@@ -74,13 +74,16 @@ export function createCliRunner(baseArgv: string[], label: "git" | "gh"): CliRun
   const rest = baseArgv.length > 1 ? baseArgv.slice(1) : []
   const codes = codesFor(label)
 
-  const fail = (args: string[], code: number | null, stderr: string): never => {
+  const failure = (args: string[], code: number | null, stderr: string): CliCommandError => {
     const text = stderr.trim()
-    throw new CliCommandError(
+    return new CliCommandError(
       `${label} ${args.join(" ")} failed with exit code ${code ?? "(killed)"}`,
       codes.failed,
       text,
     )
+  }
+  const fail = (args: string[], code: number | null, stderr: string): never => {
+    throw failure(args, code, stderr)
   }
 
   return {
@@ -143,7 +146,11 @@ export function createCliRunner(baseArgv: string[], label: "git" | "gh"): CliRun
         })
         child.once("close", (code) => {
           if (timer !== undefined) clearTimeout(timer)
-          if (code !== 0) fail(args, code, stderr)
+          // Reject, never throw: a throw inside this listener is an uncaught
+          // exception (the promise machinery cannot see it), and an uncaught
+          // exception takes the whole app down. Non-zero exits are ordinary -
+          // `git merge-base --is-ancestor` answers 1 for "not merged".
+          if (code !== 0) reject(failure(args, code, stderr))
           else resolve({ stdout, stderr, code: 0 })
         })
       })
