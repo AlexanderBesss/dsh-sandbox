@@ -7,11 +7,11 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { DockerShellExecutor } from '../src/shell.ts'
-import { type DockerSubprocessRuntime } from '../src/subprocess.ts'
-import { OutputTail } from '../src/output-tail.ts'
-import { PathMapper } from '../src/paths.ts'
-import type { Provisioner } from '../src/provisioner.ts'
+import { DockerShellExecutor } from '../src/seams/shell.ts'
+import { type DockerSubprocessRuntime } from '../src/seams/subprocess.ts'
+import { OutputTail } from '../src/utils/output-tail.ts'
+import { PathMapper } from '../src/container/paths.ts'
+import type { Provisioner } from '../src/container/provisioner.ts'
 import { testConfig } from './helpers.ts'
 import type { SandboxContext } from '../src/context.ts'
 

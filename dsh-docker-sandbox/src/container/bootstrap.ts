@@ -6,7 +6,7 @@
  * This module owns those steps and the probe that decides which are still
  * needed; the provisioner keeps the lifecycle and calls into it.
  *
- * @module dsh-docker-sandbox/bootstrap
+ * @module dsh-docker-sandbox/container/bootstrap
  */
 
 import { readFile } from "node:fs/promises"
@@ -84,7 +84,7 @@ export async function installRipgrep(
  * quoting corrupts.
  */
 export async function uploadRunnerScript(transport: DockerTransport, target: SandboxTarget): Promise<void> {
-  const content = await readFile(new URL("../agent/run.sh", import.meta.url))
+  const content = await readFile(new URL("../../agent/run.sh", import.meta.url))
   // A checkout with CRLF line endings would leave a `\r` at the end of every
   // line, which POSIX sh reports as a missing command. Normalising here
   // makes the upload independent of how the package was unpacked.

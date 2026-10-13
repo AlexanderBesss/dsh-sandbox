@@ -20,11 +20,11 @@
  * cleanly and appends no termination note to stderr, so no output scrubbing
  * is needed here.
  *
- * @module dsh-docker-sandbox/transport
+ * @module dsh-docker-sandbox/container/transport
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import type { SandboxConfig } from "./config.ts"
+import type { SandboxConfig } from "../config.ts"
 
 /** Why a Docker call could not be made. */
 export type SandboxFailureCode =

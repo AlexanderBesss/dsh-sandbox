@@ -6,7 +6,7 @@
  * job-output pumps can advance a cursor through it. The tail drops from the
  * front once the cap is hit and reports the loss on every read.
  *
- * @module dsh-docker-sandbox/output-tail
+ * @module dsh-docker-sandbox/utils/output-tail
  */
 
 import type { OutputTail as SeamOutputTail } from "@deepseek-ai/dsh-subprocess"

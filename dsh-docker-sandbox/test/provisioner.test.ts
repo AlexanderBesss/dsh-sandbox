@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { Provisioner, type ProvisionerHooks } from '../src/provisioner.ts'
-import { PathMapper } from '../src/paths.ts'
-import { containerNameFor } from '../src/session.ts'
+import { Provisioner, type ProvisionerHooks } from '../src/container/provisioner.ts'
+import { PathMapper } from '../src/container/paths.ts'
+import { containerNameFor } from '../src/container/session.ts'
 import { testConfig, fakeTransport, type FakeEngine } from './helpers.ts'
 
 const WINDOWS = 'F:\\Projects\\dsh-sandbox'

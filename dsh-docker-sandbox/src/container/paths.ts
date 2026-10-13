@@ -23,7 +23,7 @@
  *   mapping is a pure textual transform and any absolute Windows path has a
  *   container equivalent.
  *
- * @module dsh-docker-sandbox/paths
+ * @module dsh-docker-sandbox/container/paths
  */
 
 export type MountMode = "workspace" | "drives"

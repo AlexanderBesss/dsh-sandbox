@@ -6,8 +6,8 @@
  * option needs a default and a test.
  */
 
-import type { DockerTransport } from '../src/transport.ts'
-import { SandboxUnavailableError } from '../src/transport.ts'
+import type { DockerTransport } from '../src/container/transport.ts'
+import { SandboxUnavailableError } from '../src/container/transport.ts'
 import type { SandboxConfig } from '../src/config.ts'
 
 /** Unwrap `Volatile` references so tests can spell plain values. */

@@ -7,7 +7,7 @@
  * `dsh-workspace` dispatches the parallel hook, and `dsh-agent` / `dsh-jobs` /
  * `dsh-subagent` / `dsh-schedule` register the same handler this plugin uses.
  *
- * @module dsh-docker-sandbox/dsh-events
+ * @module dsh-docker-sandbox/types/dsh-events
  */
 
 declare module "@deepseek-ai/cordis" {

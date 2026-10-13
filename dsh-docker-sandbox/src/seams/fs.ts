@@ -22,7 +22,7 @@
  * The shared classifications, tokens, and error shapes live in
  * `fs-helpers.ts`.
  *
- * @module dsh-docker-sandbox/fs
+ * @module dsh-docker-sandbox/seams/fs
  */
 
 import { watch as nodeWatch, type Dirent, type FSWatcher } from "node:fs"
@@ -43,8 +43,8 @@ import {
   type FsWriteIntent,
   type FsWriteOutcome,
 } from "@deepseek-ai/dsh-fs"
-import type { SandboxContext } from "./context.ts"
-import type { SandboxConfig } from "./config.ts"
+import type { SandboxContext } from "../context.ts"
+import type { SandboxConfig } from "../config.ts"
 import {
   checkSignal,
   decodeText,
@@ -58,8 +58,8 @@ import {
   typeOf,
   typeOfDirent,
 } from "./fs-helpers.ts"
-import { isWindowsAbsolute, PathMapper } from "./paths.ts"
-import { resolveTarget, SandboxSessionError, type SandboxTarget } from "./session.ts"
+import { isWindowsAbsolute, PathMapper } from "../container/paths.ts"
+import { resolveTarget, SandboxSessionError, type SandboxTarget } from "../container/session.ts"
 
 /** Cap for the before-image a write outcome carries for the tool's diff card. */
 const DIFF_BASIS_MAX_BYTES = 64_000

@@ -11,12 +11,12 @@
  * then bound to the handle: later reads, job polling, and cancellation can run
  * outside the initiator chain and must still reach the same container.
  *
- * @module dsh-docker-sandbox/session
+ * @module dsh-docker-sandbox/container/session
  */
 
 import { createHash } from "node:crypto"
-import type { SandboxContext } from "./context.ts"
-import type { SandboxConfig } from "./config.ts"
+import type { SandboxContext } from "../context.ts"
+import type { SandboxConfig } from "../config.ts"
 
 /** A call that could not be attributed to a chat. */
 export class SandboxSessionError extends Error {

@@ -11,7 +11,7 @@
  * the terminal backend (a closed session stops the command its shell
  * started).
  *
- * @module dsh-docker-sandbox/process-group
+ * @module dsh-docker-sandbox/container/process-group
  */
 
 import type { SandboxTarget } from "./session.ts"

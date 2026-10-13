@@ -9,15 +9,15 @@
  * that `kill()` and the deadline actually stop the process in the container
  * rather than just the local `docker` client.
  *
- * @module dsh-docker-sandbox/shell
+ * @module dsh-docker-sandbox/seams/shell
  */
 
-import type { SandboxContext } from "./context.ts"
+import type { SandboxContext } from "../context.ts"
 import { ShellExecutor, type ShellExecSpec, type ShellProcess } from "@deepseek-ai/dsh-shell"
-import type { SandboxConfig } from "./config.ts"
-import { PathMapper } from "./paths.ts"
-import { Provisioner } from "./provisioner.ts"
-import { resolveTarget, SandboxSessionError, type SandboxTarget } from "./session.ts"
+import type { SandboxConfig } from "../config.ts"
+import { PathMapper } from "../container/paths.ts"
+import { Provisioner } from "../container/provisioner.ts"
+import { resolveTarget, SandboxSessionError, type SandboxTarget } from "../container/session.ts"
 import type { DockerSubprocessRuntime } from "./subprocess.ts"
 
 export interface ShellDeps {

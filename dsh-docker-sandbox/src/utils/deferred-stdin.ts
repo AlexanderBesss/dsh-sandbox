@@ -12,7 +12,7 @@
  * notification goes out once the buffer has been flushed to the child. After
  * attach, `write()` forwards the child's own backpressure.
  *
- * @module dsh-docker-sandbox/deferred-stdin
+ * @module dsh-docker-sandbox/utils/deferred-stdin
  */
 
 /** Pre-attach buffer cap: past it, writes report backpressure. */

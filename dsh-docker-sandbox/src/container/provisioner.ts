@@ -15,11 +15,11 @@
  * Windows Explorer and a file written in an editor shows up inside the
  * container.
  *
- * @module dsh-docker-sandbox/provisioner
+ * @module dsh-docker-sandbox/container/provisioner
  */
 
 import { BootstrapLogger, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
-import type { SandboxConfig } from "./config.ts"
+import type { SandboxConfig } from "../config.ts"
 import { PathMapper, type SandboxMount } from "./paths.ts"
 import { containerNameFor, COMPOSE_PROJECT_LABEL, CONTAINER_PREFIX, composeProjectFor, OWNERSHIP_LABEL, SESSION_LABEL, type SandboxTarget } from "./session.ts"
 import { DockerTransport, failureDetail, isMissingContainerError, SandboxUnavailableError } from "./transport.ts"

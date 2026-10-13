@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PathMapper, SandboxPathError } from '../src/paths.ts'
+import { PathMapper, SandboxPathError } from '../src/container/paths.ts'
 
 const WINDOWS = 'F:\\Projects\\dsh-sandbox'
 const DRIVE = '/f/Projects/dsh-sandbox'

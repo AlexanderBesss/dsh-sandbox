@@ -12,10 +12,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { SandboxContext } from "./context.ts"
 import type { SandboxConfig } from "./config.ts"
-import { PathMapper } from "./paths.ts"
-import { Provisioner, type SandboxStatus } from "./provisioner.ts"
-import { containerNameFor, type SandboxTarget } from "./session.ts"
-import { SandboxUnavailableError } from "./transport.ts"
+import { PathMapper } from "./container/paths.ts"
+import { Provisioner, type SandboxStatus } from "./container/provisioner.ts"
+import { containerNameFor, type SandboxTarget } from "./container/session.ts"
+import { SandboxUnavailableError } from "./container/transport.ts"
 
 /** One JSON reply, written and closed. HEAD gets headers only. */
 function writeJson(request: IncomingMessage, res: ServerResponse, status: number, body: unknown): void {

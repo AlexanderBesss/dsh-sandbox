@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { DockerTransport, SandboxUnavailableError, isMissingContainerError } from '../src/transport.ts'
+import { DockerTransport, SandboxUnavailableError, isMissingContainerError } from '../src/container/transport.ts'
 
 /**
  * A transport whose "docker" is `node -e <script>`.

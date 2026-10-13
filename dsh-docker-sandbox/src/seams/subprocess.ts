@@ -24,11 +24,11 @@
  * The supporting pieces live beside this module: the bounded output tail in
  * `output-tail.ts`, the pre-attach stdin buffer in `deferred-stdin.ts`.
  *
- * @module dsh-docker-sandbox/subprocess
+ * @module dsh-docker-sandbox/seams/subprocess
  */
 
 import { PassThrough } from "node:stream"
-import type { SandboxContext } from "./context.ts"
+import type { SandboxContext } from "../context.ts"
 import {
   SubprocessExecutableNotFoundError,
   SubprocessRuntime,
@@ -36,18 +36,18 @@ import {
   type SubprocessOutcome,
   type SubprocessSpawnSpec,
 } from "@deepseek-ai/dsh-subprocess"
-import type { SandboxConfig } from "./config.ts"
-import { DeferredStdin } from "./deferred-stdin.ts"
-import { isWindowsPath, type PathMapper } from "./paths.ts"
-import { signalProcessGroup } from "./process-group.ts"
-import { OutputTail, tailView } from "./output-tail.ts"
+import type { SandboxConfig } from "../config.ts"
+import { DeferredStdin } from "../utils/deferred-stdin.ts"
+import { isWindowsPath, type PathMapper } from "../container/paths.ts"
+import { signalProcessGroup } from "../container/process-group.ts"
+import { OutputTail, tailView } from "../utils/output-tail.ts"
 // Re-exported: `OutputTail` was part of this module's public surface (the
 // shell tests build fake handles from it), and the extraction to
 // `output-tail.ts` must not break that import path.
 export { OutputTail, tailView }
-import { Provisioner } from "./provisioner.ts"
-import { resolveTarget } from "./session.ts"
-import { DockerTransport } from "./transport.ts"
+import { Provisioner } from "../container/provisioner.ts"
+import { resolveTarget } from "../container/session.ts"
+import { DockerTransport } from "../container/transport.ts"
 
 /** True for the ripgrep binary the app ships (`…\@vscode\ripgrep*\bin\rg.exe`). */
 export function isPackagedRipgrep(executable: string): boolean {

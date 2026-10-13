@@ -7,11 +7,11 @@
  * during shutdown, so leaving sandbox containers behind after nothing is
  * driving them is not a leak.
  *
- * @module dsh-docker-sandbox/gc
+ * @module dsh-docker-sandbox/container/gc
  */
 
-import type { SandboxContext } from "./context.ts"
-import type { SandboxConfig } from "./config.ts"
+import type { SandboxContext } from "../context.ts"
+import type { SandboxConfig } from "../config.ts"
 import type { Provisioner } from "./provisioner.ts"
 
 /** Start the periodic sweep and its shutdown cleanup, disposed with the fiber. */

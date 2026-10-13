@@ -8,7 +8,7 @@
 
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { DeferredStdin } from '../src/deferred-stdin.ts'
+import { DeferredStdin } from '../src/utils/deferred-stdin.ts'
 
 describe('DeferredStdin', () => {
   it('replays buffered writes and a pre-attach end onto the child', () => {

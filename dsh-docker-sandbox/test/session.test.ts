@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CONTAINER_PREFIX, OWNERSHIP_LABEL, SandboxSessionError, containerNameFor, resolveTarget, targetForSession } from '../src/session.ts'
+import { CONTAINER_PREFIX, OWNERSHIP_LABEL, SandboxSessionError, containerNameFor, resolveTarget, targetForSession } from '../src/container/session.ts'
 import type { SandboxContext } from '../src/context.ts'
 import { testConfig } from './helpers.ts'
 

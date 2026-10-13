@@ -5,7 +5,7 @@
  * that {@link DockerFileSystem} applies across every operation, kept apart
  * from the seam class so the mapping rules are stated once.
  *
- * @module dsh-docker-sandbox/fs-helpers
+ * @module dsh-docker-sandbox/seams/fs-helpers
  */
 
 import { type Dirent } from "node:fs"

@@ -15,17 +15,17 @@
  * group too, escalating to KILL after `graceMs` — killing only the local
  * `docker` client would leave the command running in the container.
  *
- * @module dsh-docker-sandbox/terminal
+ * @module dsh-docker-sandbox/seams/terminal
  */
 
-import type { SandboxContext } from "./context.ts"
+import type { SandboxContext } from "../context.ts"
 import { TerminalError, type TerminalBackend, type TerminalBackendSession, type TerminalSendOperation, type TerminalWaitReason } from "@deepseek-ai/dsh-terminal"
-import type { SandboxConfig } from "./config.ts"
-import { PathMapper } from "./paths.ts"
-import { Provisioner } from "./provisioner.ts"
-import { resolveTarget, targetForSession, type SandboxTarget } from "./session.ts"
-import { signalProcessGroup, type ProcessGroupSignal } from "./process-group.ts"
-import { type DockerTransport, type LiveProcess } from "./transport.ts"
+import type { SandboxConfig } from "../config.ts"
+import { PathMapper } from "../container/paths.ts"
+import { Provisioner } from "../container/provisioner.ts"
+import { resolveTarget, targetForSession, type SandboxTarget } from "../container/session.ts"
+import { signalProcessGroup, type ProcessGroupSignal } from "../container/process-group.ts"
+import { type DockerTransport, type LiveProcess } from "../container/transport.ts"
 
 /** Rolling transcript cap per session. */
 const TRANSCRIPT_CAP = 200_000
