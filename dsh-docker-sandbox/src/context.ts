@@ -25,17 +25,31 @@ import type { Context } from "@deepseek-ai/cordis"
 import type { TerminalSessionService } from "@deepseek-ai/dsh-terminal"
 
 /** The agent registry slice this plugin reads. */
+/** The durable user-message shape the Agent inbox accepts (`dsh-agent-loop`). */
+export interface DurableUserMessage {
+  role: "user"
+  id: string
+  source: Record<string, unknown>
+  content: Array<{ type: string; text?: string }>
+}
+
+/** A live Agent as this plugin touches it: lookup plus inbox delivery. */
+export interface LiveAgent {
+  id: string
+  session?: { id: string; header?: { cwd?: string } }
+  /** `idle` between turns, `running` inside one (the loop's phase). */
+  status?: "idle" | "running"
+  /** Queue a message for the next turn, waking a quiescent agent. */
+  followup?(message: DurableUserMessage): void
+  /** Inject a message into the in-flight turn. */
+  steer?(message: DurableUserMessage): void
+}
+
 export interface AgentService {
   /** The Agent that initiated the current async chain, if any. */
-  currentInitiator(): {
-    id: string
-    session?: { id: string; header?: { cwd?: string } }
-  } | undefined
+  currentInitiator(): LiveAgent | undefined
   /** The live Agent for a session id, if one is registered. */
-  get?(id: string): {
-    id: string
-    session?: { id: string; header?: { cwd?: string } }
-  } | undefined
+  get?(id: string): LiveAgent | undefined
 }
 
 /** The session store slice this plugin reads. */
@@ -67,9 +81,34 @@ export interface WorkspaceRegistryService {
   readonly archivedSessionIds: readonly string[]
 }
 
-/** One started subagent run; the child session rides on `localAgent`. */
+/** One content block as the subagent seam reports a child's closing text. */
+export interface SubagentOutputBlock {
+  type: string
+  text?: string
+}
+
+/** How one one-shot child's run ended, as the subagent service reports it. */
+export interface SubagentResult {
+  /** `completed` only when the child finished its turn cleanly. */
+  stopReason: string
+  /** The child's final assistant content blocks. */
+  output: SubagentOutputBlock[]
+}
+
+/**
+ * One started subagent run; the child session rides on `localAgent`.
+ *
+ * `result` settles when the child's turn reaches quiescence, and `dispose`
+ * closes the child. The app's own delegation tool always consumes both - a
+ * run nobody settles leaves its child resident, which is what keeps the
+ * lineage view showing a finished review as still running.
+ */
 export interface SubagentRun {
   localAgent?: { session?: { id: string } }
+  /** Settles when the child's turn reaches quiescence. */
+  result: Promise<SubagentResult>
+  /** Close the child agent and its session. */
+  dispose?(): void | Promise<void>
 }
 
 /**

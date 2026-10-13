@@ -10,7 +10,14 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import type { SandboxContext, SubagentService } from "./context.ts"
+import { randomUUID } from "node:crypto"
+import type {
+  DurableUserMessage,
+  SandboxContext,
+  SubagentResult,
+  SubagentRun,
+  SubagentService,
+} from "./context.ts"
 import type { SandboxConfig } from "./config.ts"
 import { PathMapper } from "./container/paths.ts"
 import { Provisioner, type SandboxStatus } from "./container/provisioner.ts"
@@ -56,6 +63,80 @@ export function sameOrigin(request: IncomingMessage): boolean {
     return parsed.host === new URL(`http://${host}`).host
   } catch {
     return false
+  }
+}
+
+/** One line telling the parent how its review child ended. */
+function settlementSummary(stopReason: string | undefined): string {
+  const subject = "The code review of this session's worktree"
+  switch (stopReason) {
+    case "completed": return `${subject} finished.`
+    case "aborted": return `${subject} was stopped before it finished.`
+    case "max-tokens": return `${subject} ran out of room before it finished.`
+    case "refusal": return `${subject} declined the task.`
+    case "error": return `${subject} failed before it finished.`
+    default: return `${subject} ended (${String(stopReason ?? "unknown")}) without reporting a verdict.`
+  }
+}
+
+/**
+ * Build the durable notice that hands a finished review back to the parent,
+ * mirroring the app's own settlement notice (`subagent-settled`): a summary
+ * line plus the child's closing text, shaped as a user message the Agent
+ * inbox accepts.
+ */
+export function settlementMessage(childId: string, result: SubagentResult | undefined): DurableUserMessage {
+  const summary = settlementSummary(result?.stopReason)
+  const closing = (result?.output ?? []).filter(
+    (block): block is { type: string; text: string } => block.type === "text" && typeof block.text === "string" && block.text !== "",
+  )
+  return {
+    role: "user",
+    id: randomUUID(),
+    source: { kind: "subagent-settled", form: "notice", summary, senderSessionId: childId },
+    content: [
+      { type: "text", text: summary },
+      ...(closing.length === 0
+        ? [{ type: "text", text: "It left no closing message." }]
+        : [{ type: "text", text: "Its review verdict:" }, ...closing.map((block) => ({ type: "text", text: block.text }))]),
+    ],
+  }
+}
+
+/**
+ * Consume one review run the way the app's own delegation tool does: wait for
+ * the child to settle, dispose it (a run nobody settles leaves its child
+ * resident, which is what keeps the lineage view showing a finished review as
+ * still running), then hand the verdict to the parent - queued when the
+ * parent is idle, steered into its in-flight turn when it is not. Every step
+ * is contained: this must never reject, because an unhandled rejection here
+ * is an uncaught exception in the host.
+ */
+export async function settleReviewRun(
+  ctx: SandboxContext,
+  run: SubagentRun,
+  sessionId: string,
+  childId: string,
+): Promise<void> {
+  let result: SubagentResult | undefined
+  try {
+    result = await run.result
+  } catch {
+    result = undefined
+  }
+  try {
+    await run.dispose?.()
+  } catch {
+    // Disposal failure must not cost the parent its verdict.
+  }
+  try {
+    const parent = ctx.agents?.get?.(sessionId)
+    if (parent === undefined) return // the parent closed while the review ran
+    const message = settlementMessage(childId, result)
+    if (parent.status === "running" && parent.steer !== undefined) parent.steer(message)
+    else parent.followup?.(message)
+  } catch {
+    // Nothing to deliver to; the review still ran and its log stands.
   }
 }
 
@@ -171,18 +252,21 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
             })
             return
           }
-          // Fire-and-forget: `start` resolves when the child's inbox accepts
-          // the prompt, not when the review finishes. The signal never
-          // aborts, so the reviewer runs to completion on its own.
+          // `start` resolves when the child's inbox accepts the prompt, not
+          // when the review finishes. Settle the run in the background: the
+          // verdict reaches the parent as a settlement notice and the child is
+          // disposed, exactly like the app's own background delegation.
           const run = await subagents.start(provider, {
             prompt: [{ type: "text", text: buildReviewPrompt(bundle.entry, bundle.changes) }],
             parent,
             signal: new AbortController().signal,
             label: "code review",
           })
+          const childSessionId = run.localAgent?.session?.id ?? ""
+          void settleReviewRun(ctx, run, sessionId, childSessionId)
           writeJson(request, response, 200, {
             ok: true,
-            data: { provider, childSessionId: run.localAgent?.session?.id },
+            data: { provider, childSessionId },
           })
           return
         }
