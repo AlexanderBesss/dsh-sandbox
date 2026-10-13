@@ -7,10 +7,11 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { DockerShellExecutor } from '../src/seams/shell.ts'
+import { DockerShellExecutor, looksLikePowerShell } from '../src/seams/shell.ts'
 import { type DockerSubprocessRuntime } from '../src/seams/subprocess.ts'
 import { OutputTail } from '../src/utils/output-tail.ts'
 import { PathMapper } from '../src/container/paths.ts'
+import type { DockerTransport } from '../src/container/transport.ts'
 import type { Provisioner } from '../src/container/provisioner.ts'
 import { testConfig } from './helpers.ts'
 import type { SandboxContext } from '../src/context.ts'
@@ -51,6 +52,7 @@ function makeExecutor(
     id: 'session-1',
     session: { id: 'session-1', header: { cwd: WORKSPACE } },
   },
+  options: { bashProbe?: 'yes' | 'no'; spawnLog?: Array<{ argv: string[] }> } = {},
 ): DockerShellExecutor {
   const ctx = {
     agents: { currentInitiator: () => initiator ?? undefined },
@@ -58,8 +60,16 @@ function makeExecutor(
   } as unknown as SandboxContext
   const config = testConfig()
   return new DockerShellExecutor(ctx, {
-    subprocess: { spawn: () => handle } as unknown as DockerSubprocessRuntime,
+    subprocess: {
+      spawn: (request: { argv: string[] }) => {
+        options.spawnLog?.push({ argv: request.argv })
+        return handle
+      },
+    } as unknown as DockerSubprocessRuntime,
     provisioner: { ensure: async () => undefined } as unknown as Provisioner,
+    transport: {
+      exec: async () => ({ code: 0, stdout: options.bashProbe ?? 'no', stderr: '' }),
+    } as unknown as DockerTransport,
     paths: new PathMapper('workspace', config.containerWorkspace),
     config,
   })
@@ -139,5 +149,90 @@ describe('DockerShellExecutor.execute', () => {
     const handle = fakeHandle({ exit: { exitCode: 0, signal: null, killed: false } })
     const orphan = makeExecutor(handle, null)
     await expect(orphan.execute({ command: 'true' })).rejects.toThrow(/not running inside a conversation/)
+  })
+})
+
+describe('looksLikePowerShell', () => {
+  it('recognizes PowerShell syntax', () => {
+    for (const command of [
+      'Get-Location; Test-Path .\\dsh-docker-sandbox\\package.json; Test-Path x',
+      'Select-String -Path src\\*.ts -Pattern foo',
+      'Write-Host $env:PATH',
+      '[System.IO.File]::ReadAllText("C:\\x")',
+      'Add-Type -AssemblyName System.Windows.Forms',
+    ]) {
+      expect(looksLikePowerShell(command)).toBe(true)
+    }
+  })
+
+  it('leaves POSIX commands alone', () => {
+    for (const command of [
+      'ls -la && pwd',
+      'git status --porcelain && git log --oneline -5',
+      'cd dsh-docker-sandbox && corepack pnpm install --frozen-lockfile',
+      'git show-ref --head && git for-each-ref',
+      'docker ps --format "{{.Names}}"',
+    ]) {
+      expect(looksLikePowerShell(command)).toBe(false)
+    }
+  })
+})
+
+describe('DockerShellExecutor PowerShell guard', () => {
+  it('answers PowerShell text with a redirect instead of running it', async () => {
+    const handle = fakeHandle({ exit: { exitCode: 0, signal: null, killed: false } })
+    const spawnLog: Array<{ argv: string[] }> = []
+    const process = await makeExecutor(handle, undefined, { spawnLog }).execute({
+      command: 'Get-Location; Test-Path .\\package.json',
+    })
+    const result = await process.result()
+    expect(result.exitCode).toBe(127)
+    expect(result.stderr.text).toContain('PowerShell is not available')
+    expect(result.stderr.text).toContain('/workspace')
+    // Nothing was spawned: the guard answers before the container runs anything.
+    expect(spawnLog).toHaveLength(0)
+  })
+})
+
+describe('DockerShellExecutor shell choice', () => {
+  it('uses bash when the container has it (Debian images, dash bashisms)', async () => {
+    const handle = fakeHandle({ exit: { exitCode: 0, signal: null, killed: false } })
+    const spawnLog: Array<{ argv: string[] }> = []
+    const executor = makeExecutor(handle, undefined, { bashProbe: 'yes', spawnLog })
+    await (await executor.execute({ command: 'echo ${PIPESTATUS[0]}' })).result()
+    expect(spawnLog[0]!.argv).toEqual(['/bin/bash', '-lc', 'echo ${PIPESTATUS[0]}'])
+  })
+
+  it('keeps the configured shell when bash is absent (alpine)', async () => {
+    const handle = fakeHandle({ exit: { exitCode: 0, signal: null, killed: false } })
+    const spawnLog: Array<{ argv: string[] }> = []
+    const executor = makeExecutor(handle, undefined, { bashProbe: 'no', spawnLog })
+    await (await executor.execute({ command: 'ls' })).result()
+    expect(spawnLog[0]!.argv).toEqual(['/bin/sh', '-lc', 'ls'])
+  })
+
+  it('probes once per container', async () => {
+    const handle = fakeHandle({ exit: { exitCode: 0, signal: null, killed: false } })
+    let probes = 0
+    const ctx = {
+      agents: { currentInitiator: () => ({ id: 'session-1', session: { id: 'session-1', header: { cwd: WORKSPACE } } }) },
+      sessions: { get: () => undefined },
+    } as unknown as SandboxContext
+    const config = testConfig()
+    const executor = new DockerShellExecutor(ctx, {
+      subprocess: { spawn: () => handle } as unknown as DockerSubprocessRuntime,
+      provisioner: { ensure: async () => undefined } as unknown as Provisioner,
+      transport: {
+        exec: async () => {
+          probes += 1
+          return { code: 0, stdout: 'yes', stderr: '' }
+        },
+      } as unknown as DockerTransport,
+      paths: new PathMapper('workspace', config.containerWorkspace),
+      config,
+    })
+    await (await executor.execute({ command: 'ls' })).result()
+    await (await executor.execute({ command: 'pwd' })).result()
+    expect(probes).toBe(1)
   })
 })

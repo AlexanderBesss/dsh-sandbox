@@ -41,6 +41,7 @@ interface FieldSpec {
 const FIELDS: FieldSpec[] = [
   { path: ["worktree"], label: "Per-session git worktrees", kind: "boolean", hint: "Each chat works in its own git worktree and branch, so chats cannot conflict; the session header gains a merge-request button. Applies to chats as they provision their next container." },
   { path: ["image"], label: "Container image", kind: "string", hint: "Applied to the next container the chat provisions." },
+  { path: ["pwshGuard"], label: "Reject PowerShell commands", kind: "boolean", hint: "The app's Pwsh tool sends PowerShell text into the Linux container; the guard answers once with a redirect to the Bash tool instead of a 127 cmdlet-not-found. Turn off only for images that carry pwsh." },
   { path: ["resourceLimits", "memory"], label: "Memory limit", kind: "string", hint: "Docker size syntax, e.g. 4g or 512m. Empty leaves it unbounded." },
   { path: ["resourceLimits", "memorySwap"], label: "Memory + swap cap", kind: "string", hint: "Set equal to the memory limit to forbid swap spillover (hard cap)." },
   { path: ["resourceLimits", "cpu"], label: "CPU cores", kind: "string", hint: "Docker --cpus value, e.g. 2. Empty leaves it unbounded." },
