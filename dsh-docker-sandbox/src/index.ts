@@ -79,7 +79,7 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
   // Registering a Service instance replaces the seam for the whole app; the
   // bundle patch has already disabled the local providers this displaces.
   const subprocess = new DockerSubprocessRuntime(ctx, { transport, provisioner, paths, config, worktrees })
-  const shell = new DockerShellExecutor(ctx, { subprocess, provisioner, paths, config, worktrees })
+  const shell = new DockerShellExecutor(ctx, { subprocess, provisioner, transport, paths, config, worktrees })
   const filesystem = new DockerFileSystem(ctx, { paths, config, worktrees })
   void shell
   void filesystem

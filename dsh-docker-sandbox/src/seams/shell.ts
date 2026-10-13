@@ -18,15 +18,89 @@ import type { SandboxConfig } from "../config.ts"
 import { PathMapper } from "../container/paths.ts"
 import { Provisioner } from "../container/provisioner.ts"
 import { resolveTarget, SandboxSessionError, type SandboxTarget } from "../container/session.ts"
+import type { DockerTransport } from "../container/transport.ts"
 import type { DockerSubprocessRuntime } from "./subprocess.ts"
 import type { WorktreeManager } from "../container/worktrees.ts"
 
 export interface ShellDeps {
   subprocess: DockerSubprocessRuntime
   provisioner: Provisioner
+  transport: DockerTransport
   paths: PathMapper
   config: SandboxConfig
   worktrees?: WorktreeManager
+}
+
+/**
+ * PowerShell-only syntax the Linux container's shell cannot run.
+ *
+ * The app's Pwsh tool is a plain consumer of the `ctx.shell` seam: it hands
+ * PowerShell text to whatever executor backs that seam, and here that is a
+ * `docker exec /bin/sh -lc`. Rather than let dash answer `Get-Location: not
+ * found` (exit 127, no explanation), the seam recognizes the dialect and
+ * answers once, clearly. The markers are deliberately PowerShell-specific:
+ * approved-verb cmdlets (`Get-ChildItem`, `Test-Path`), `$env:` lookup syntax,
+ * and .NET type literals - none of which appear in POSIX commands.
+ */
+export function looksLikePowerShell(command: string): boolean {
+  return (
+    /\b(?:Get|Set|New|Test|Select|Remove|Add|Copy|Move|Invoke|Import|Export|Write|Read|Clear|ForEach|Where|Sort|Measure|Group|Format|Out|Push|Pop|ConvertFrom|ConvertTo|Compare|Tee)-[A-Z][A-Za-z]+/.test(command) ||
+    /\$env:/.test(command) ||
+    /\bAdd-Type\b/.test(command) ||
+    /\[(?:System|Microsoft)\.[A-Za-z]/.test(command)
+  )
+}
+
+/** What the guard answers, phrased to redirect the model to what works. */
+const POWERSHELL_REJECTION =
+  "dsh-docker-sandbox: PowerShell is not available in this sandbox. The session runs in a Linux " +
+  "container whose shell is sh/bash, so PowerShell cmdlets (Get-Location, Test-Path, Select-String, " +
+  "$env:NAME, ...) do not exist here. Use the Bash tool with POSIX commands instead: the workspace " +
+  "is /workspace, and host drives appear as /c/..., /f/..., ... (exit 127 is synthesized by the " +
+  "sandbox, not by a command)."
+
+/**
+ * A settled shell process carrying the guard's rejection, shaped exactly like
+ * the real handle so the tool layer renders it as a completed 127 run.
+ */
+function rejectedProcess(message: string, timeoutMs: number, details: Record<string, unknown>): unknown {
+  const reader = (text: string) => ({
+    readFrom: (fromByte: number) => ({ text: text.slice(fromByte), nextOffset: text.length, lossy: false }),
+    get text() {
+      return text
+    },
+    get lossy() {
+      return false
+    },
+    get bytes() {
+      return text.length
+    },
+  })
+  const stderr = reader(message)
+  const stdout = reader("")
+  return {
+    status: "completed",
+    exitCode: 127,
+    signal: null,
+    observed: { stdout, stderr },
+    done: Promise.resolve(),
+    readOutput: () => ({ delta: `[stderr]\n${message}`, lossy: false }),
+    kill: () => false,
+    result: () =>
+      Promise.resolve({
+        exitCode: 127,
+        signal: null,
+        timedOut: false,
+        aborted: false,
+        timeoutMs,
+        stdout: { text: "", truncated: false },
+        stderr: { text: message, truncated: false },
+      }),
+    get closed() {
+      return true
+    },
+    details,
+  }
 }
 
 export class DockerShellExecutor extends ShellExecutor {
@@ -39,6 +113,9 @@ export class DockerShellExecutor extends ShellExecutor {
   ) {
     super(ctx, "shell")
   }
+
+  /** Per-container shell choice, filled by the first command (see `shellArgvFor`). */
+  private readonly shellArgvCache = new Map<string, string[]>()
 
   /**
    * Normalize a request into this world: the working directory becomes the
@@ -113,15 +190,26 @@ export class DockerShellExecutor extends ShellExecutor {
       workspace: String(resolved.sandboxWorkspace ?? config.workspaceRoot),
       shared: resolved.sandboxShared === true,
     }
+    const timeoutMs = Math.max(0, Math.min(resolved.timeoutMs ?? config.timeoutMs.get(), config.maxTimeoutMs.get()))
+    // The app's Pwsh tool hands PowerShell text to this seam; answer it with
+    // one clear redirect before a container is even provisioned for a command
+    // that cannot run there.
+    if (config.pwshGuard && looksLikePowerShell(String(resolved.command ?? ""))) {
+      return rejectedProcess(POWERSHELL_REJECTION, timeoutMs, {
+        container: target.container,
+        image: config.image.get(),
+        workspace: target.workspace,
+        rejected: "powershell",
+      }) as unknown as ShellProcess
+    }
+
     await this.deps.provisioner.ensure(target, { signal: resolved.signal })
 
     const maxOutputBytes = resolved.maxOutputBytes ?? config.maxOutputBytes.get()
-    // `resolve` already clamped the deadline; re-clamp for specs that skipped it.
-    const timeoutMs = Math.max(0, Math.min(resolved.timeoutMs ?? config.timeoutMs.get(), config.maxTimeoutMs.get()))
     const onExpiry = resolved.onExpiry ?? "kill"
 
     const handle = this.deps.subprocess.spawn({
-      argv: [...config.shellArgv, String(resolved.command)],
+      argv: [...(await this.shellArgvFor(target)), String(resolved.command)],
       cwd: resolved.cwd,
       env: resolved.env,
       graceMs: resolved.graceMs ?? config.graceMs.get(),
@@ -259,6 +347,36 @@ export class DockerShellExecutor extends ShellExecutor {
     }
 
     return proc as unknown as ShellProcess
+  }
+
+  /**
+   * The shell argv for one container: the configured `shellArgv` unless the
+   * container has bash, in which case bash. Debian images (node:22) ship
+   * `/bin/sh` as dash, which fails on ordinary bash syntax (`${arr[@]}`,
+   * `[[ ... ]]`) with "Bad substitution"; bash removes that class of failure.
+   * Alpine images have no bash, so the configured argv stays. Probed once per
+   * container name and cached; a container recreated under the same name
+   * reuses the answer, which is safe because the image rarely changes.
+   */
+  private async shellArgvFor(target: SandboxTarget): Promise<string[]> {
+    const cached = this.shellArgvCache.get(target.container)
+    if (cached !== undefined) return cached
+    let argv = this.deps.config.shellArgv
+    try {
+      const probe = await this.deps.transport.exec([
+        "exec",
+        target.container,
+        "sh",
+        "-c",
+        "command -v bash >/dev/null 2>&1 && echo yes || echo no",
+      ])
+      if (probe.stdout.toString().trim() === "yes") argv = ["/bin/bash", "-lc"]
+    } catch {
+      // A failed probe leaves the configured argv in play; the command itself
+      // will report any real problem.
+    }
+    this.shellArgvCache.set(target.container, argv)
+    return argv
   }
 
   /** The isolation is a Docker container, not a same-world restriction. */

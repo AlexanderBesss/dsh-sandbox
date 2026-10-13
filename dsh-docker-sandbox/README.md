@@ -77,7 +77,7 @@ CLI on PATH.
 
 ```sh
 # from this directory
-pnpm install && pnpm build
+npm install && npm run build
 ```
 
 Then add the plugin to the profile (in-app: the plugin manager, or point the
@@ -204,10 +204,10 @@ F:\Projects\app.worktrees\session-3   (branch dsh-sbx/session-3)
 ## Development
 
 ```sh
-pnpm typecheck          # sources, tests, and configs
-pnpm test               # unit tests, no engine needed
-pnpm test:integration   # against the live Docker engine
-pnpm build              # lib/ (host ESM) + lib/client.js (client bundle)
+npm run typecheck       # sources, tests, and configs
+npm test                # unit tests, no engine needed
+npm run test:integration # against the live Docker engine
+npm run build           # lib/ (host ESM) + lib/client.js (client bundle)
 ```
 
 The unit suite covers path mapping (Windows ⇄ container), session → container
@@ -215,7 +215,7 @@ naming, the `docker run` argv, and provisioning against a fake engine. The
 integration suite (`test/integration/`) provisions a real container and checks
 the command runner, cancellation by process group, bind-mount byte sharing
 between host and container, and ripgrep availability. It is skipped unless
-`DSH_DOCKER=1`, which `pnpm test:integration` sets for you.
+`DSH_DOCKER=1`, which `npm run test:integration` sets for you.
 
 ## Troubleshooting
 
@@ -233,6 +233,15 @@ between host and container, and ripgrep availability. It is skipped unless
 - **`NAME_CONFLICT`** — a container this plugin does not own already carries
   the name `dsh-sbx-<session>`. Rename that container, or remove it if it is
   stale; the plugin will not adopt or delete a container it did not create.
+- **`PowerShell is not available in this sandbox`** — the app's Pwsh tool hands
+  PowerShell text to the shell seam, which here is a Linux container; the guard
+  (`pwshGuard`, on by default) answers once with a redirect to the Bash tool
+  instead of letting `sh` emit `Get-Location: not found` (exit 127). Set
+  `pwshGuard: false` only for images that actually carry `pwsh`.
+- **`/bin/sh: 1: Bad substitution`** — Debian images run `dash` as `/bin/sh`,
+  which fails on bash syntax. The plugin probes each container once and uses
+  `/bin/bash -lc` when bash is present; override with `shellArgv` (e.g.
+  `["/bin/bash", "-lc"]`) to force a shell.
 - **A container is left behind** — `docker rm -f $(docker ps -aq --filter label=dsh.sandbox=1)`.
 
 ## Security notes

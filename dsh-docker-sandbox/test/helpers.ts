@@ -40,6 +40,7 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     maxOutputBytes: 64000,
     graceMs: 3000,
     shellArgv: ['/bin/sh', '-lc'],
+    pwshGuard: true,
     bootstrapTools: true,
     ripgrepSource: 'package',
     idleTtlMs: 7200000,

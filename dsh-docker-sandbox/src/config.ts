@@ -69,6 +69,9 @@ export const Config = Schema.object({
 
   /** Shell that runs shell-tool command text inside the container. */
   shellArgv: Schema.array(Schema.string()).default(["/bin/sh", "-lc"]),
+  pwshGuard: Schema.boolean().default(true).description(
+    "reject PowerShell commands (the Pwsh tool's cmdlets cannot run in a Linux container) with a redirect to the Bash tool, instead of letting the container's shell answer 127",
+  ),
 
   /** Install `rg` into the container so `glob` / `grep` work. */
   bootstrapTools: Schema.boolean().default(true),

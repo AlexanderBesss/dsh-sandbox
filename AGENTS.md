@@ -11,7 +11,7 @@ Every commit that changes a package's shipped code must bump that package's
 
 The app's plugin manager shows the installed version, so the bump is how an
 installed copy is told apart from the source tree — an unchanged version means
-a stale install is invisible. After bumping, rebuild (`pnpm build`) so the
+a stale install is invisible. After bumping, rebuild (`npm run build`) so the
 artifacts and the version ship together.
 
 ## TypeScript: no `any`
