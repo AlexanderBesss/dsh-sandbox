@@ -31,12 +31,20 @@ export interface AgentService {
     id: string
     session?: { id: string; header?: { cwd?: string } }
   } | undefined
+  /** The live Agent for a session id, if one is registered. */
+  get?(id: string): {
+    id: string
+    session?: { id: string; header?: { cwd?: string } }
+  } | undefined
 }
 
 /** The session store slice this plugin reads. */
 export interface SessionService {
   /** The live session, or undefined when none has that id. */
-  get(id: string): { id: string; header?: { cwd?: string } } | undefined
+  get(id: string): {
+    id: string
+    header?: { cwd?: string; parentSession?: string }
+  } | undefined
 }
 
 /** One HTTP route on the embedded web server. */
@@ -59,6 +67,35 @@ export interface WorkspaceRegistryService {
   readonly archivedSessionIds: readonly string[]
 }
 
+/** One started subagent run; the child session rides on `localAgent`. */
+export interface SubagentRun {
+  localAgent?: { session?: { id: string } }
+}
+
+/**
+ * The subagent service (`dsh-subagent`), read for the review button.
+ *
+ * The shape mirrors the shipped call sites: `start(name, request)` establishes
+ * a one-shot child on a registered provider and resolves when the child's
+ * inbox accepts the prompt (not when the turn finishes), and `list()` names
+ * the registered providers in insertion order.
+ */
+export interface SubagentService {
+  /** Registered provider names, in insertion order. */
+  list(): string[]
+  /** Start one one-shot child; resolves at initial inbox acceptance. */
+  start(
+    provider: string,
+    request: {
+      prompt: Array<{ type: "text"; text: string }>
+      /** The delegating parent Agent (its session anchors the child). */
+      parent: { id: string; session?: { id: string } }
+      signal: AbortSignal
+      label?: string
+    },
+  ): Promise<SubagentRun>
+}
+
 /**
  * The context as this plugin sees it: the cordis context plus the four DSH
  * services it consumes. `apply()` receives this, and every seam class keeps it
@@ -78,4 +115,10 @@ export type SandboxContext = Context & {
    * only samples it during GC, so a missing registry must not stall the seams.
    */
   workspaceRegistry?: WorkspaceRegistryService
+  /**
+   * Subagent spawner (`dsh-subagent`), read for the review button. Captured
+   * through a deferred inject, so an absent or isolated service never blocks
+   * the plugin (same pattern as `terminals`).
+   */
+  subagents?: SubagentService
 }

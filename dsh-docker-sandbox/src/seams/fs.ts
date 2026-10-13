@@ -60,6 +60,7 @@ import {
 } from "./fs-helpers.ts"
 import { isWindowsAbsolute, PathMapper } from "../container/paths.ts"
 import { resolveTarget, SandboxSessionError, type SandboxTarget } from "../container/session.ts"
+import type { WorktreeManager } from "../container/worktrees.ts"
 
 /** Cap for the before-image a write outcome carries for the tool's diff card. */
 const DIFF_BASIS_MAX_BYTES = 64_000
@@ -73,6 +74,7 @@ const STAT_BATCH = 64
 export interface FsDeps {
   paths: PathMapper
   config: SandboxConfig
+  worktrees?: WorktreeManager
 }
 
 export class DockerFileSystem extends FileSystem {
@@ -89,7 +91,7 @@ export class DockerFileSystem extends FileSystem {
   /** The initiating conversation, when this call has one. */
   private trySession(): SandboxTarget | undefined {
     try {
-      return resolveTarget(this.ctx, this.deps.config)
+      return resolveTarget(this.ctx, this.deps.config, this.deps.worktrees)
     } catch {
       return undefined
     }

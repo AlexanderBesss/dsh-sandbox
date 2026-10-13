@@ -12,6 +12,8 @@
 import { createElement } from "react"
 import { ContainerChip } from "./chip.tsx"
 import { SandboxConfigForm, type RowConfigForm } from "./config-form.tsx"
+import { MergeRequestButton } from "./merge-button.tsx"
+import { ReviewButton } from "./review-button.tsx"
 
 /** One entry in a list or keyed slot. */
 interface SlotRegistration {
@@ -50,6 +52,27 @@ export function apply(ctx: ClientContext): void {
     label: "Sandbox container",
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(ContainerChip, { sessionId: props.sessionId })))
+
+  // The merge-request button, beside the chip. It renders only when the
+  // status route reports a worktree for the chat, so with worktree mode off
+  // the header looks exactly as it did before.
+  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
+    name: "conversation.session.header.utilities",
+    id: "dsh-docker-sandbox:merge",
+    order: 21,
+    label: "Merge request",
+    registrant: "dsh-docker-sandbox",
+  }, (props) => createElement(MergeRequestButton, { sessionId: props.sessionId })))
+
+  // The review button: spawns a fresh subagent that reviews this session's
+  // changes with no memory of the conversation that made them.
+  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
+    name: "conversation.session.header.utilities",
+    id: "dsh-docker-sandbox:review",
+    order: 22,
+    label: "Review changes",
+    registrant: "dsh-docker-sandbox",
+  }, (props) => createElement(ReviewButton, { sessionId: props.sessionId })))
 
   // Give the `docker-sandbox` row a Configure page on the Plugins screen.
   // The key is `<bundle package>#<row id>`; the page hands the component the

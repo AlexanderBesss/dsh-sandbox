@@ -47,6 +47,11 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     terminalPty: false,
     resourceLimits: { cpu: '', memory: '', memorySwap: '' },
     gcOnUnload: false,
+    worktree: false,
+    worktreeRoot: '',
+    worktreeBranchPrefix: 'dsh-sbx/',
+    gitArgv: ['git'],
+    ghArgv: ['gh'],
     ...overrides,
   }
   plain.resourceLimits = { cpu: '', memory: '', memorySwap: '', ...overrides.resourceLimits }
@@ -60,6 +65,8 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     maxOutputBytes: ref(plain.maxOutputBytes),
     graceMs: ref(plain.graceMs),
     idleTtlMs: ref(plain.idleTtlMs),
+    worktree: ref(plain.worktree),
+    worktreeRoot: ref(plain.worktreeRoot),
     resourceLimits: {
       cpu: ref(plain.resourceLimits.cpu),
       memory: ref(plain.resourceLimits.memory),

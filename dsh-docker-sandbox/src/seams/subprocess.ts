@@ -48,6 +48,7 @@ export { OutputTail, tailView }
 import { Provisioner } from "../container/provisioner.ts"
 import { resolveTarget } from "../container/session.ts"
 import { DockerTransport } from "../container/transport.ts"
+import type { WorktreeManager } from "../container/worktrees.ts"
 
 /** True for the ripgrep binary the app ships (`…\@vscode\ripgrep*\bin\rg.exe`). */
 export function isPackagedRipgrep(executable: string): boolean {
@@ -59,6 +60,7 @@ export interface SubprocessDeps {
   provisioner: Provisioner
   paths: PathMapper
   config: SandboxConfig
+  worktrees?: WorktreeManager
 }
 
 /**
@@ -98,7 +100,7 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
   /** Resolve an executable name inside the conversation's container. */
   async resolveExecutable(name: string, cwd?: string): Promise<string> {
     void cwd
-    const target = resolveTarget(this.ctx, this.deps.config)
+    const target = resolveTarget(this.ctx, this.deps.config, this.deps.worktrees)
     await this.deps.provisioner.ensure(target)
     const result = await this.deps.transport.execInContainer(
       target,
@@ -122,7 +124,7 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
     if (!Array.isArray(spec.argv) || spec.argv.length === 0) {
       throw new TypeError("subprocess spawn requires a non-empty argv")
     }
-    const target = resolveTarget(this.ctx, config)
+    const target = resolveTarget(this.ctx, config, this.deps.worktrees)
     const op = `op${OP_NONCE}${++this.nextOp}`
     const executable = this.mapExecutable(String(spec.argv[0]))
 

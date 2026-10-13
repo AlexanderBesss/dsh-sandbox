@@ -28,4 +28,19 @@ describe('Config', () => {
     expect(() => Config({ graceMs: -1 })).toThrow()
     expect(Config({ gcIntervalMs: 1000 }).gcIntervalMs).toBe(1000)
   })
+
+  it('defaults worktree mode off, with a readable branch prefix and host CLIs', () => {
+    const config = Config({})
+    expect(config.worktree.get()).toBe(false)
+    expect(config.worktreeRoot.get()).toBe('')
+    expect(config.worktreeBranchPrefix).toBe('dsh-sbx/')
+    expect(config.gitArgv).toEqual(['git'])
+    expect(config.ghArgv).toEqual(['gh'])
+  })
+
+  it('lets worktree mode be toggled live', () => {
+    // The plugin manager writes volatile leaves straight into the running
+    // config; the worktree manager reads the toggle on every call.
+    expect(Config({ worktree: true }).worktree.get()).toBe(true)
+  })
 })

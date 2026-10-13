@@ -26,6 +26,7 @@ import { Provisioner } from "../container/provisioner.ts"
 import { resolveTarget, targetForSession, type SandboxTarget } from "../container/session.ts"
 import { signalProcessGroup, type ProcessGroupSignal } from "../container/process-group.ts"
 import { type DockerTransport, type LiveProcess } from "../container/transport.ts"
+import type { WorktreeManager } from "../container/worktrees.ts"
 
 /** Rolling transcript cap per session. */
 const TRANSCRIPT_CAP = 200_000
@@ -331,6 +332,7 @@ export interface TerminalDeps {
   provisioner: Provisioner
   paths: PathMapper
   config: SandboxConfig
+  worktrees?: WorktreeManager
 }
 
 /**
@@ -346,9 +348,9 @@ export function createShellBackend(ctx: SandboxContext, deps: TerminalDeps): Ter
     type: "shell",
     spawn: async (request) => {
       const sessionId = request.sessionId === undefined || request.sessionId === ""
-        ? resolveTarget(ctx, deps.config).sessionId
+        ? resolveTarget(ctx, deps.config, deps.worktrees).sessionId
         : String(request.sessionId)
-      const target = targetForSession(ctx, deps.config, sessionId)
+      const target = targetForSession(ctx, deps.config, sessionId, undefined, deps.worktrees)
       const cwd = request.cwd === undefined
         ? deps.paths.containerRoot(target.workspace)
         : deps.paths.toContainer(request.cwd, target.workspace)

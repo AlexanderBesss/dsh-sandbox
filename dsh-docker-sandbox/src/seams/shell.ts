@@ -19,12 +19,14 @@ import { PathMapper } from "../container/paths.ts"
 import { Provisioner } from "../container/provisioner.ts"
 import { resolveTarget, SandboxSessionError, type SandboxTarget } from "../container/session.ts"
 import type { DockerSubprocessRuntime } from "./subprocess.ts"
+import type { WorktreeManager } from "../container/worktrees.ts"
 
 export interface ShellDeps {
   subprocess: DockerSubprocessRuntime
   provisioner: Provisioner
   paths: PathMapper
   config: SandboxConfig
+  worktrees?: WorktreeManager
 }
 
 export class DockerShellExecutor extends ShellExecutor {
@@ -76,7 +78,7 @@ export class DockerShellExecutor extends ShellExecutor {
       const requested = typeof spec.workdir === "string" && spec.workdir !== "" ? spec.workdir : spec.cwd
       return { ...filled, cwd: requested ?? this.deps.paths.containerRoot(workspace) }
     }
-    const session = resolveTarget(this.ctx, this.deps.config)
+    const session = resolveTarget(this.ctx, this.deps.config, this.deps.worktrees)
     // The shipped shell tools name the directory `workdir`; `cwd` is kept for
     // direct callers of this executor.
     const requested = spec.workdir ?? spec.cwd

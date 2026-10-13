@@ -23,6 +23,7 @@ import type { SandboxConfig } from "../config.ts"
 import { PathMapper, type SandboxMount } from "./paths.ts"
 import { containerNameFor, COMPOSE_PROJECT_LABEL, CONTAINER_PREFIX, composeProjectFor, OWNERSHIP_LABEL, SESSION_LABEL, type SandboxTarget } from "./session.ts"
 import { DockerTransport, failureDetail, isMissingContainerError, SandboxUnavailableError } from "./transport.ts"
+import type { WorktreeInfo } from "./worktrees.ts"
 
 /** What the UI and the status route need to know about one sandbox. */
 export interface SandboxStatus {
@@ -41,6 +42,10 @@ export interface SandboxStatus {
   lastUsedAt: number
   /** Last provisioning failure, kept so the UI can show why. */
   error?: string
+  /** This session's git worktree, when worktree mode gave it one. */
+  worktree?: WorktreeInfo
+  /** Why worktree creation failed, when it did. */
+  worktreeError?: string
 }
 
 /** A container as `docker inspect` reports it, narrowed to the fields used here. */
@@ -124,6 +129,32 @@ export class Provisioner {
       "-w",
       this.paths.containerRoot(target.workspace),
     ]
+
+    // A worktree session's gitdir lives in the main repo's `.git` (mounted
+    // above at its drive form). `GIT_DIR`/`GIT_WORK_TREE` stop git from
+    // following the worktree's `.git` file — a Windows path the container
+    // cannot resolve — and pin every git call in this box to this session's
+    // worktree.
+    const extra = this.paths.extraMountFor(target.workspace)
+    if (extra !== undefined) {
+      args.push(
+        "-e",
+        `GIT_DIR=${extra.containerGitDir}`,
+        "-e",
+        `GIT_WORK_TREE=${this.paths.containerRoot(target.workspace)}`,
+      )
+      // Mirror the host's effective git settings (autocrlf, identity) into
+      // the container: Git for Windows keeps them in a system config the
+      // container cannot see, and without them container git reads a CRLF
+      // checkout as phantom-modified.
+      const mirrored = Object.entries(extra.gitConfig)
+      if (mirrored.length > 0) {
+        args.push("-e", `GIT_CONFIG_COUNT=${mirrored.length}`)
+        mirrored.forEach(([key, value], index) => {
+          args.push("-e", `GIT_CONFIG_KEY_${index}=${key}`, "-e", `GIT_CONFIG_VALUE_${index}=${value}`)
+        })
+      }
+    }
 
     const limits = this.config.resourceLimits
     const cpu = limits?.cpu.get()

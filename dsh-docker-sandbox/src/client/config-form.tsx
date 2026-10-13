@@ -34,11 +34,12 @@ export interface RowConfigForm {
 interface FieldSpec {
   path: string[]
   label: string
-  kind: "string" | "number"
+  kind: "string" | "number" | "boolean"
   hint: string
 }
 
 const FIELDS: FieldSpec[] = [
+  { path: ["worktree"], label: "Per-session git worktrees", kind: "boolean", hint: "Each chat works in its own git worktree and branch, so chats cannot conflict; the session header gains a merge-request button. Applies to chats as they provision their next container." },
   { path: ["image"], label: "Container image", kind: "string", hint: "Applied to the next container the chat provisions." },
   { path: ["resourceLimits", "memory"], label: "Memory limit", kind: "string", hint: "Docker size syntax, e.g. 4g or 512m. Empty leaves it unbounded." },
   { path: ["resourceLimits", "memorySwap"], label: "Memory + swap cap", kind: "string", hint: "Set equal to the memory limit to forbid swap spillover (hard cap)." },
@@ -59,7 +60,7 @@ function readPath(value: Record<string, unknown>, path: string[]): unknown {
   return cursor
 }
 
-/** One labeled input that commits on blur or Enter. */
+/** One labeled input that commits on blur or Enter (a checkbox commits at once). */
 function FieldRow({ spec, current, writable, onCommit }: {
   spec: FieldSpec
   current: unknown
@@ -83,6 +84,22 @@ function FieldRow({ spec, current, writable, onCommit }: {
     setBusy(false)
     setDraft(undefined)
     setFailed(!ok)
+  }
+  if (spec.kind === "boolean") {
+    return createElement("label", { style: { display: "grid", gap: 2, marginBlock: 8 } },
+      createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 } },
+        createElement("input", {
+          type: "checkbox",
+          checked: current === true,
+          disabled: !writable || busy,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+            void onCommit(spec.path, event.target.checked)
+          },
+        }),
+        spec.label,
+      ),
+      createElement("span", { style: { fontSize: 12, opacity: 0.6 } }, spec.hint),
+    )
   }
   return createElement("label", { style: { display: "grid", gap: 2, marginBlock: 8 } },
     createElement("span", { style: { fontSize: 13 } }, spec.label),

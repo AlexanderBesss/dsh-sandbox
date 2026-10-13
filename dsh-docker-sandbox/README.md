@@ -25,7 +25,7 @@ into the container without further changes:
 | `ctx.shell` | the shell tool runs `/bin/sh -lc` in the container; results carry `cwd`, `container` |
 | `ctx.fs` | read, write, stat, list run against the bind-mounted workspace **on the host** — same bytes, no container needed; watching works, so the sidebar tree live-updates |
 | `ctx.terminals` | a new `shell` terminal backend backed by the container (registered only when the app exposes `terminals` to the plugin; recent builds isolate it to the terminal group) |
-| `ctx.webServer` | `GET /sandbox/api/list`, `GET /sandbox/api/status?session=<id>` for the UI |
+| `ctx.webServer` | `GET /sandbox/api/list`, `GET /sandbox/api/status?session=<id>`, `POST /sandbox/api/merge-request?session=<id>` for the UI |
 
 Because `ctx.fs` is replaced, the sidebar file tree, attachments, and `present`
 all see the container's view of the workspace too.
@@ -139,6 +139,67 @@ from `package.json` bundles plus `cordis.patch.yml`.
 | `terminalPty` | `false` | request a TTY for terminal sessions |
 | `resourceLimits` | `{ cpu: "", memory: "", memorySwap: "" }` | e.g. `{ cpu: "2", memory: "4g", memorySwap: "4g" }`, passed as `--cpus` / `--memory` / `--memory-swap`; empty leaves that limit unset |
 | `gcOnUnload` | `false` | delete every sandbox container when the plugin unloads |
+| `worktree` | `false` | give every conversation its own `git worktree` and branch (see below); live toggle |
+| `worktreeRoot` | `""` | where worktrees live; empty = a sibling `<repoRoot>.worktrees/` per checkout, a set path is a root with one subdirectory per repo |
+| `worktreeBranchPrefix` | `dsh-sbx/` | branch namespace for the per-session worktrees |
+| `gitArgv` | `["git"]` | the host git CLI used for worktree bookkeeping |
+| `ghArgv` | `["gh"]` | the GitHub CLI used by the merge-request button |
+
+## Worktree mode and merge requests
+
+By default every chat on the same workspace shares one checkout — two chats
+editing one file conflict exactly as they would in two terminals. With
+`worktree` enabled (a live toggle in the plugin manager), each conversation
+instead works in its own `git worktree`, on its own branch:
+
+```
+chat "session-3"  ──▶  container dsh-sbx-session-3  ──▶  /workspace
+                        ⇅ bind mount
+F:\Projects\app.worktrees\session-3   (branch dsh-sbx/session-3)
+```
+
+- **Per-chat isolation.** The container mounts the worktree, and the host file
+  tools read and write it, so chats cannot step on each other. The worktree is
+  created lazily on the chat's first tool call (one `git worktree add`), and
+  the session → worktree mapping is kept in a `registry.json` under the
+  worktrees root, so it survives restarts.
+- **Git works inside the container too.** A linked worktree's `.git` file
+  points at `<mainRepo>/.git/worktrees/<name>` — a host path the container
+  cannot resolve on its own. So a worktree session's container also mounts the
+  main repo's `.git` at its drive form (`/f/Projects/app/.git`) and exports
+  `GIT_DIR`/`GIT_WORK_TREE` pinned to the session's worktree, plus the host's
+  effective `core.autocrlf`/identity through `GIT_CONFIG_*` (Git for Windows
+  keeps those in a system config the container cannot see, and without them
+  container git reads a CRLF checkout as phantom-modified). `git status`,
+  commits, and the merge button all work in the sandbox, and tools that probe
+  git internals map to those mounts instead of hitting the mount boundary.
+- **Merge request button.** With a worktree, the session header gains a
+  *merge request* button beside the container chip: it commits everything in
+  the worktree, pushes the branch to `origin`, and opens a GitHub pull
+  request through `gh`. Without `gh` installed it stops at the pushed branch
+  and reports the remote's compare URL. The PR contains only that
+  conversation's changes — its own branch diff.
+- **Review button.** Beside it, a *review* button spawns a fresh subagent
+  that reviews the conversation's changes — its own commits plus uncommitted
+  and untracked edits, collected as a diff against the branch's fork point.
+  The reviewer starts with a clean slate: it carries **no reasoning from the
+  main agent**, only the collected diff and the tools it runs itself in the
+  sandbox (a subagent's tools see the parent's worktree, so `git diff` and
+  file reads show the same work). The child session appears in the app's
+  subagent UI; the button reports its id.
+- **Non-git and broken setups fall back, visibly.** A workspace that is not a
+  git checkout keeps sharing as before (logged once); a failed creation is
+  sticky, logged, and shown in the chip tooltip rather than failing every tool
+  call.
+- **Worktrees outlive their containers on purpose.** Archiving a chat deletes
+  its container but never an unmerged or dirty worktree. The GC sweep prunes a
+  worktree only when the conversation is archived **and** the tree is clean
+  **and** the branch is already merged. Anything else persists until you merge
+  it or remove it by hand (`git worktree remove`).
+- **Known limitation:** the sidebar file tree still shows the main checkout.
+  The app's file API passes the session's original `header.cwd` and carries no
+  session identity to `ctx.fs`, so the plugin cannot remap it; the chip
+  tooltip and the merge button show the real worktree path and branch.
 
 ## Development
 

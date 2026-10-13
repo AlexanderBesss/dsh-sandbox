@@ -143,3 +143,49 @@ describe('PathMapper.containerRoot', () => {
     expect(new PathMapper('drives', '/workspace').containerRoot()).toBe('/c')
   })
 })
+
+describe('extra mounts (worktree mode)', () => {
+  const worktree = 'F:\\Projects\\app.worktrees\\session-3'
+  const gitHost = 'F:\\Projects\\app\\.git'
+
+  function mapperWithExtra(): PathMapper {
+    const mapper = new PathMapper('workspace', '/workspace')
+    mapper.registerExtraMount(worktree, {
+      mount: { hostPath: gitHost, containerPath: '/f/Projects/app/.git' },
+      containerGitDir: '/f/Projects/app/.git/worktrees/session-3',
+      gitConfig: {},
+    })
+    return mapper
+  }
+
+  it('mounts the main .git alongside the worktree', () => {
+    const mounts = mapperWithExtra().mountsFor(worktree)
+    expect(mounts).toHaveLength(2)
+    expect(mounts[1]).toEqual({ hostPath: gitHost, containerPath: '/f/Projects/app/.git' })
+  })
+
+  it('maps drive-form and Windows forms of gitdir paths into the container', () => {
+    const mapper = mapperWithExtra()
+    expect(mapper.toContainer('/f/Projects/app/.git/worktrees/session-3/HEAD', worktree))
+      .toBe('/f/Projects/app/.git/worktrees/session-3/HEAD')
+    expect(mapper.toContainer('F:\\Projects\\app\\.git\\config', worktree))
+      .toBe('/f/Projects/app/.git/config')
+  })
+
+  it('maps those container paths back to Windows paths', () => {
+    expect(mapperWithExtra().toWindows('/f/Projects/app/.git/config', worktree))
+      .toBe('F:\\Projects\\app\\.git\\config')
+  })
+
+  it('still rejects paths outside both mounts', () => {
+    expect(() => mapperWithExtra().toContainer('/f/Projects/other/x', worktree))
+      .toThrowError(SandboxPathError)
+  })
+
+  it('leaves non-worktree sessions untouched', () => {
+    const mapper = mapperWithExtra()
+    expect(mapper.mountsFor(WINDOWS)).toHaveLength(1)
+    expect(() => mapper.toContainer('/f/Projects/app/.git/config', WINDOWS))
+      .toThrowError(SandboxPathError)
+  })
+})

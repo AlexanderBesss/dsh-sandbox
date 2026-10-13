@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CONTAINER_PREFIX, OWNERSHIP_LABEL, SandboxSessionError, containerNameFor, resolveTarget, targetForSession } from '../src/container/session.ts'
+import type { WorktreeEntry, WorktreeManager } from '../src/container/worktrees.ts'
 import type { SandboxContext } from '../src/context.ts'
 import { testConfig } from './helpers.ts'
 
@@ -117,6 +118,46 @@ describe('targetForSession', () => {
       workspace: 'F:\\Projects\\stored',
       shared: false,
     })
+  })
+
+  it('moves a session onto its worktree when the manager gives it one', () => {
+    // Worktree mode: the seams mount and read/write the worktree, and the
+    // checkout it was carved from rides along for the UI and the merge flow.
+    const ctx = {
+      agents: { currentInitiator: () => undefined },
+      sessions: { get: (id: string) => ({ id, header: { cwd: 'F:\\Projects\\stored' } }) },
+    } as unknown as SandboxContext
+    const entry: WorktreeEntry = {
+      sessionId: 'session-3',
+      mainWorkspace: 'F:\\Projects\\stored',
+      repoRoot: 'F:\\Projects\\stored',
+      worktreePath: 'F:\\Projects\\stored.worktrees\\session-3',
+      branch: 'dsh-sbx/session-3',
+      createdAt: 0,
+      hostGitDir: 'F:/Projects/stored/.git/worktrees/session-3',
+      gitConfig: {},
+    }
+    const worktrees = { ensure: () => entry } as unknown as WorktreeManager
+    expect(targetForSession(ctx, testConfig({ worktree: true }), 'session-3', undefined, worktrees)).toEqual({
+      sessionId: 'session-3',
+      container: `${CONTAINER_PREFIX}session-3`,
+      workspace: 'F:\\Projects\\stored.worktrees\\session-3',
+      shared: false,
+      mainWorkspace: 'F:\\Projects\\stored',
+    })
+  })
+
+  it('keeps the shared workspace when the manager declines one', () => {
+    // Non-git workspace, or a sticky creation failure: the session behaves
+    // exactly as it did before worktree mode existed.
+    const ctx = {
+      agents: { currentInitiator: () => undefined },
+      sessions: { get: (id: string) => ({ id, header: { cwd: 'F:\\Projects\\stored' } }) },
+    } as unknown as SandboxContext
+    const worktrees = { ensure: () => undefined } as unknown as WorktreeManager
+    const target = targetForSession(ctx, testConfig({ worktree: true }), 'session-3', undefined, worktrees)
+    expect(target.workspace).toBe('F:\\Projects\\stored')
+    expect(target.mainWorkspace).toBeUndefined()
   })
 })
 

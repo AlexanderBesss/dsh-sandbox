@@ -36,9 +36,10 @@
 
         # Image for the per-chat sandbox container. Any image with POSIX `sh`
         # plus coreutils/busybox works (`base64`, `stat`, `ls`, `mv`).
-        # `node:22-alpine` also carries Node.js + npm for JS/TS development;
-        # swap back to `alpine:3.20` for a minimal image.
-        image: node:22-alpine
+        # `node:22` (Debian) carries Node.js + npm plus git, curl, python3,
+        # make/gcc for real dev work; `node:22-alpine` lacks git, and
+        # `alpine:3.20` is the minimal image.
+        image: node:22
 
         # Keep the container alive between commands.
         # command: ["sleep", "infinity"]

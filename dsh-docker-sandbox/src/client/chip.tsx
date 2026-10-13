@@ -85,8 +85,11 @@ export function ContainerChip({ sessionId }: ContainerChipProps) {
   const title = [
     status === undefined ? "" : `container ${status.container}\n`,
     status === undefined ? "" : `phase ${status.phase} · image ${status.image}\n`,
-    status === undefined ? "" : row("workspace", status.workspace),
+    status === undefined ? "" : row("workspace", status.worktree?.path ?? status.workspace),
     status === undefined ? "" : row("mounted at", status.containerWorkspace),
+    status?.worktree === undefined ? "" : `branch ${status.worktree.branch}${status.worktree.dirty ? " (dirty)" : ""}\n`,
+    status?.worktree === undefined ? "" : row("carved from", status.worktree.mainWorkspace),
+    status?.worktreeError === undefined ? "" : `worktree failed: ${status.worktreeError}\n`,
     error === undefined ? "" : `unavailable: ${error}\n`,
     copied ? "copied" : "click to copy the container name",
   ].join("")

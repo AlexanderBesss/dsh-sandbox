@@ -267,3 +267,35 @@ describe('Provisioner archive release', () => {
     expect(calls.some((call) => call.args[0] === 'rm' && call.args[2] === 'dsh-sbx-live-chat')).toBe(false)
   })
 })
+
+describe('Provisioner.runArgs with a worktree session', () => {
+  it('mounts the main .git and pins GIT_DIR/GIT_WORK_TREE for the session', () => {
+    const config = testConfig()
+    const { transport } = fakeTransport()
+    const paths = new PathMapper('workspace', config.containerWorkspace)
+    const worktree = 'F:\\Projects\\dsh-sandbox.worktrees\\session-3'
+    paths.registerExtraMount(worktree, {
+      mount: { hostPath: 'F:/Projects/dsh-sandbox/.git', containerPath: '/f/Projects/dsh-sandbox/.git' },
+      containerGitDir: '/f/Projects/dsh-sandbox/.git/worktrees/session-3',
+      gitConfig: { 'core.autocrlf': 'true', 'user.name': 'Ada', 'user.email': 'ada@example.com' },
+    })
+    const provisioner = new Provisioner(transport, config, paths)
+    const args = provisioner.runArgs({
+      sessionId: 'session-3',
+      container: containerNameFor('session-3'),
+      workspace: worktree,
+      shared: false,
+      mainWorkspace: WINDOWS,
+    })
+    expect(args).toContain('GIT_DIR=/f/Projects/dsh-sandbox/.git/worktrees/session-3')
+    expect(args).toContain('GIT_WORK_TREE=/workspace')
+    expect(args).toContain('GIT_CONFIG_COUNT=3')
+    expect(args).toContain('GIT_CONFIG_KEY_0=core.autocrlf')
+    expect(args).toContain('GIT_CONFIG_VALUE_0=true')
+    expect(args).toContain('GIT_CONFIG_KEY_2=user.email')
+    expect(args).toContain('GIT_CONFIG_VALUE_2=ada@example.com')
+    const volumes = args.filter((arg, index) => args[index - 1] === '-v')
+    expect(volumes).toContain('F:/Projects/dsh-sandbox/.git:/f/Projects/dsh-sandbox/.git')
+    expect(volumes).toContain('F:/Projects/dsh-sandbox.worktrees/session-3:/workspace')
+  })
+})

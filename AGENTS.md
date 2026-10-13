@@ -1,5 +1,19 @@
 # Agent instructions
 
+## Versioning: bump the version on every commit
+
+Every commit that changes a package's shipped code must bump that package's
+`version` in its `package.json` (pre-1.0 convention):
+
+- **patch** (`x.y.Z`): fixes, small features, internal changes.
+- **minor** (`x.Y.0`): a feature worth calling out, or a public-facing change.
+- **major** (`X.0.0`): breaking changes.
+
+The app's plugin manager shows the installed version, so the bump is how an
+installed copy is told apart from the source tree — an unchanged version means
+a stale install is invisible. After bumping, rebuild (`pnpm build`) so the
+artifacts and the version ship together.
+
 ## TypeScript: no `any`
 
 Do not use `any` in TypeScript source unless it is genuinely impossible or not

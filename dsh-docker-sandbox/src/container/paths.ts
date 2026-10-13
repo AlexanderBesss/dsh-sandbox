@@ -36,6 +36,23 @@ export interface SandboxMount {
   containerPath: string
 }
 
+/**
+ * An extra bind mount one session needs beyond its workspace.
+ *
+ * Worktree mode carves the session's checkout out of a main repo, and a
+ * linked worktree's `.git` file points into `<mainRepo>/.git/worktrees/<name>`
+ * — a Windows path the container cannot see. Mounting the main `.git` at its
+ * drive form keeps git (and anything reading git internals) working, and this
+ * record lets the mapper translate paths under it instead of rejecting them.
+ */
+export interface ExtraMount {
+  mount: SandboxMount
+  /** Container path of the linked worktree's gitdir, for `GIT_DIR`. */
+  containerGitDir: string
+  /** Host-effective git settings to mirror into the container (`GIT_CONFIG_*`). */
+  gitConfig: Record<string, string>
+}
+
 /** A path that cannot be expressed inside the sandbox. */
 export class SandboxPathError extends Error {
   constructor(
@@ -84,10 +101,26 @@ function resolveSegments(path: string): string {
 }
 
 export class PathMapper {
+  /** Per-session extra mounts (worktree mode's main `.git`), keyed by workspace. */
+  private readonly extraMounts = new Map<string, ExtraMount>()
+
   constructor(
     readonly mode: MountMode,
     readonly containerWorkspace: string,
   ) {}
+
+  /**
+   * Record an extra mount for one session workspace, so `mountsFor` adds it to
+   * the container and the mappers accept paths under it.
+   */
+  registerExtraMount(workspace: string, extra: ExtraMount): void {
+    this.extraMounts.set(normalize(workspace), extra)
+  }
+
+  /** The extra mount recorded for one session workspace, if any. */
+  extraMountFor(workspace: string): ExtraMount | undefined {
+    return this.extraMounts.get(normalize(workspace))
+  }
 
   /**
    * Translate a Windows path to the path the same file has under a drive-root
@@ -124,6 +157,7 @@ export class PathMapper {
    * @returns the bind mounts the sandbox container needs.
    */
   mountsFor(workspace: string): SandboxMount[] {
+    const extra = this.extraMounts.get(normalize(workspace))
     if (this.mode === "drives") {
       const drives = new Set<string>()
       if (isWindowsAbsolute(workspace)) drives.add(workspace[0]!.toLowerCase())
@@ -139,10 +173,15 @@ export class PathMapper {
         "PATH_INVALID",
       )
     }
-    return [{
+    const mounts = [{
       hostPath: workspace,
       containerPath: this.containerWorkspace,
     }]
+    // A worktree session also needs its main repo's `.git` (the linked
+    // worktree's gitdir lives there). In `drives` mode the drive mount
+    // already covers it.
+    if (extra !== undefined) mounts.push(extra.mount)
+    return mounts
   }
 
   /** The Windows path of the session workspace (the volume source). */
@@ -180,6 +219,17 @@ export class PathMapper {
       if (raw === root || raw.startsWith(`${root}/`)) {
         return resolveSegments(raw)
       }
+      // A worktree session's main-repo `.git` is mounted at its drive form;
+      // git plumbing names those paths, so they map rather than get rejected.
+      const extra = this.extraMounts.get(normalize(workspace))
+      if (extra !== undefined) {
+        const mounted = extra.mount.containerPath
+        if (raw === mounted || raw.startsWith(`${mounted}/`)) return resolveSegments(raw)
+        const hostDrive = PathMapper.windowsToDrive(extra.mount.hostPath)
+        if (raw === hostDrive || raw.startsWith(`${hostDrive}/`)) {
+          return resolveSegments(`${mounted}${raw.slice(hostDrive.length)}`)
+        }
+      }
       throw new SandboxPathError(
         `"${path}" is outside the sandbox mount (${this.mode} mode mounts ${this.describeMounts(workspace)}); `
         + "run the command with a working directory inside the workspace, or set mountMode to \"drives\"",
@@ -213,6 +263,14 @@ export class PathMapper {
    */
   toWindows(path: string, workspace: string): string | undefined {
     const raw = resolveSegments(normalize(path))
+    const extra = this.extraMounts.get(normalize(workspace))
+    if (extra !== undefined) {
+      const mounted = extra.mount.containerPath
+      if (raw === mounted || raw.startsWith(`${mounted}/`)) {
+        const host = normalize(extra.mount.hostPath)
+        return `${host.slice(0, 2)}${host.slice(2).replace(/\//g, "\\")}${raw.slice(mounted.length).replace(/\//g, "\\")}`
+      }
+    }
     if (this.mode === "workspace") {
       // `mountsFor` refuses a non-Windows anchor; this method reports "no host
       // path" instead, so a caller anchoring on a container path still gets a

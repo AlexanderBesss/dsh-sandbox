@@ -26,10 +26,11 @@
  */
 
 import type { Context } from "@deepseek-ai/cordis"
-import type { SandboxContext } from "./context.ts"
+import type { SandboxContext, SubagentService } from "./context.ts"
 import { Config, type SandboxConfig } from "./config.ts"
 import { DockerFileSystem } from "./seams/fs.ts"
 import { startContainerGc } from "./container/gc.ts"
+import { createCliRunner } from "./container/git.ts"
 import { type MountMode, PathMapper } from "./container/paths.ts"
 import { Provisioner } from "./container/provisioner.ts"
 import { registerStatusRoute } from "./status.ts"
@@ -37,6 +38,7 @@ import { DockerShellExecutor } from "./seams/shell.ts"
 import { DockerSubprocessRuntime } from "./seams/subprocess.ts"
 import { createShellBackend } from "./seams/terminal.ts"
 import { DockerTransport } from "./container/transport.ts"
+import { WorktreeManager } from "./container/worktrees.ts"
 
 export const name = "docker-sandbox"
 
@@ -64,12 +66,21 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     // orphan, even when this process never provisioned it.
     isSessionLive: (sessionId) => ctx.sessions?.get?.(sessionId) !== undefined,
   })
+  // Worktree mode is read live (it is a volatile option), so the manager is
+  // always built; `ensure` is a no-op while the toggle is off.
+  const worktrees = new WorktreeManager({
+    git: createCliRunner(config.gitArgv, "git"),
+    gh: createCliRunner(config.ghArgv, "gh"),
+    config,
+    logger: ctx.logger,
+    paths,
+  })
 
   // Registering a Service instance replaces the seam for the whole app; the
   // bundle patch has already disabled the local providers this displaces.
-  const subprocess = new DockerSubprocessRuntime(ctx, { transport, provisioner, paths, config })
-  const shell = new DockerShellExecutor(ctx, { subprocess, provisioner, paths, config })
-  const filesystem = new DockerFileSystem(ctx, { paths, config })
+  const subprocess = new DockerSubprocessRuntime(ctx, { transport, provisioner, paths, config, worktrees })
+  const shell = new DockerShellExecutor(ctx, { subprocess, provisioner, paths, config, worktrees })
+  const filesystem = new DockerFileSystem(ctx, { paths, config, worktrees })
   void shell
   void filesystem
 
@@ -78,10 +89,18 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
   // terminal service never blocks the shell/fs/subprocess takeover above.
   ctx.inject(["terminals"], (inner: Context) => {
     (inner as SandboxContext).terminals.registerBackend(
-      createShellBackend(inner as SandboxContext, { transport, provisioner, paths, config }),
+      createShellBackend(inner as SandboxContext, { transport, provisioner, paths, config, worktrees }),
     )
   })
-  registerStatusRoute(ctx, { provisioner, paths, config })
+  // Deferred: capture the subagent service when it becomes visible, so the
+  // review button can spawn a fresh reviewer. An absent or isolated service
+  // leaves the review route answering 503, and never blocks the seams.
+  let subagents: SubagentService | undefined
+  ctx.inject(["subagents"], (inner: Context) => {
+    subagents = (inner as SandboxContext).subagents
+  })
+
+  registerStatusRoute(ctx, { provisioner, paths, config, worktrees, subagents: () => subagents })
 
   // The app stops an archived conversation's work through this hook — the
   // same seam the agent registry and job owners use — and the container is
@@ -94,12 +113,14 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
 
   // The periodic sweep (archived conversations first, then the idle TTL) and
   // its shutdown cleanup.
-  startContainerGc(ctx, provisioner, config)
+  startContainerGc(ctx, provisioner, config, worktrees)
 
   // Say what the plugin took over, once, so a surprising tool error is
   // explainable from the log without reading the config.
   ctx.logger.info(
     `dsh-docker-sandbox: shell, fs, subprocess and shell terminals now run in Docker `
-    + `(image ${config.image.get()}, mount ${config.mountMode})`,
+    + `(image ${config.image.get()}, mount ${config.mountMode}`
+    + (config.worktree.get() ? ", worktree mode on" : "")
+    + ")",
   )
 }

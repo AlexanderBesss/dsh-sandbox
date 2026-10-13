@@ -120,6 +120,47 @@ export const Config = Schema.object({
 
   /** Delete this plugin's containers when the plugin unloads. */
   gcOnUnload: Schema.boolean().default(false),
+
+  /**
+   * Give every conversation its own `git worktree` and branch instead of
+   * sharing the session's checkout. Two chats on one repository then cannot
+   * conflict, and the session-header merge-request button turns a
+   * conversation's branch into a PR containing only its own changes.
+   *
+   * Volatile: the toggle applies live. A chat whose container is already
+   * running keeps its current mount until that container is recreated (the
+   * file tools move to the worktree immediately; archive the chat, or let the
+   * idle TTL collect the container, to realign the shell side).
+   */
+  worktree: Schema.boolean().default(false).volatile(),
+
+  /**
+   * Where worktrees live. Empty (the default) puts them in a sibling
+   * `<repoRoot>.worktrees/` directory next to each checkout; a set path is
+   * used as a root, one subdirectory per repository under it.
+   */
+  worktreeRoot: Schema.string().default("").volatile(),
+
+  /**
+   * Branch prefix for the per-session worktrees, e.g. `dsh-sbx/session-3`.
+   * Needs a valid git branch namespace: no spaces, `..`, `~`, `^`, `:`, `?`,
+   * `*`, `[`, and no trailing `/` or `.`.
+   */
+  worktreeBranchPrefix: Schema.string().default("dsh-sbx/"),
+
+  /**
+   * The host git CLI invocation, used for worktree bookkeeping (the workspace
+   * is host files, so this never goes through a container). Set to a full
+   * path if PATH does not carry it.
+   */
+  gitArgv: Schema.array(Schema.string()).default(["git"]),
+
+  /**
+   * The GitHub CLI invocation, used by the merge-request button to open pull
+   * requests. When it is not installed the button still commits and pushes,
+   * and reports the remote's compare URL instead.
+   */
+  ghArgv: Schema.array(Schema.string()).default(["gh"]),
 })
 
 /** The validated config object `apply()` receives from the `Config` schema. */

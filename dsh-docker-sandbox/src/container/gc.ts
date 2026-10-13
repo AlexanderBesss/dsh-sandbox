@@ -13,11 +13,17 @@
 import type { SandboxContext } from "../context.ts"
 import type { SandboxConfig } from "../config.ts"
 import type { Provisioner } from "./provisioner.ts"
+import type { WorktreeManager } from "./worktrees.ts"
 
 /** Start the periodic sweep and its shutdown cleanup, disposed with the fiber. */
-export function startContainerGc(ctx: SandboxContext, provisioner: Provisioner, config: SandboxConfig): void {
+export function startContainerGc(
+  ctx: SandboxContext,
+  provisioner: Provisioner,
+  config: SandboxConfig,
+  worktrees?: WorktreeManager,
+): void {
   let registryReported = false
-  const sweep = async (): Promise<string[]> => {
+  const sweep = async (): Promise<{ containers: string[]; worktrees: string[] }> => {
     const registry = ctx.get("workspaceRegistry") as { archivedSessionIds?: readonly string[] } | undefined
     if (registry?.archivedSessionIds === undefined && !registryReported) {
       // `ctx.get` answers `undefined` for a name nobody provides, so a missing
@@ -25,14 +31,20 @@ export function startContainerGc(ctx: SandboxContext, provisioner: Provisioner, 
       registryReported = true
       ctx.logger.warn("dsh-docker-sandbox: no workspace registry in reach; archived containers are reclaimed by idle TTL only")
     }
-    const archived = await provisioner.releaseArchived(new Set(registry?.archivedSessionIds ?? []))
+    const archived = new Set(registry?.archivedSessionIds ?? [])
+    const containers = await provisioner.releaseArchived(archived)
     const idle = await provisioner.collectIdle()
-    return [...archived, ...idle]
+    // Worktrees outlive their container on purpose: unmerged work is the one
+    // thing this feature must never destroy. Only archived, clean, already
+    // merged branches are pruned (see WorktreeManager.pruneForArchived).
+    const prunedTrees = worktrees === undefined ? [] : await worktrees.pruneForArchived(archived)
+    return { containers: [...containers, ...idle], worktrees: prunedTrees }
   }
 
   const gc = setInterval(() => {
     void sweep().then((deleted) => {
-      if (deleted.length > 0) ctx.logger.info(`dsh-docker-sandbox: released containers: ${deleted.join(", ")}`)
+      if (deleted.containers.length > 0) ctx.logger.info(`dsh-docker-sandbox: released containers: ${deleted.containers.join(", ")}`)
+      if (deleted.worktrees.length > 0) ctx.logger.info(`dsh-docker-sandbox: pruned merged worktrees: ${deleted.worktrees.join(", ")}`)
     }, (error: unknown) => {
       ctx.logger.warn(`dsh-docker-sandbox: container GC pass failed: ${(error as Error).message}`)
     })

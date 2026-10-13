@@ -10,12 +10,14 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import type { SandboxContext } from "./context.ts"
+import type { SandboxContext, SubagentService } from "./context.ts"
 import type { SandboxConfig } from "./config.ts"
 import { PathMapper } from "./container/paths.ts"
 import { Provisioner, type SandboxStatus } from "./container/provisioner.ts"
+import { buildReviewPrompt, changesAreEmpty } from "./container/review.ts"
 import { containerNameFor, type SandboxTarget } from "./container/session.ts"
 import { SandboxUnavailableError } from "./container/transport.ts"
+import type { WorktreeManager } from "./container/worktrees.ts"
 
 /** One JSON reply, written and closed. HEAD gets headers only. */
 function writeJson(request: IncomingMessage, res: ServerResponse, status: number, body: unknown): void {
@@ -31,18 +33,23 @@ function writeJson(request: IncomingMessage, res: ServerResponse, status: number
 /**
  * Reject cross-site requests.
  *
- * A request with no `Origin` header (curl, a form GET) passes: the endpoint is
- * read-only and names nothing an attacker could act on beyond container names,
- * so the guard is about the browser-driven chip, not a hard auth boundary.
- * The comparison is the full host (name *and* port): another app on the same
- * host but a different port is a different origin and gets refused.
+ * A GET with no `Origin` header (curl, a form GET) passes: the read-only
+ * endpoint names nothing an attacker could act on beyond container names, so
+ * the guard is about the browser-driven chip, not a hard auth boundary. The
+ * comparison is the full host (name *and* port): another app on the same host
+ * but a different port is a different origin and gets refused.
+ *
+ * A POST (the merge-request action) is stricter: it changes state, so it
+ * requires an `Origin` header that matches exactly — a cross-site form or
+ * fetch cannot forge one, and a no-Origin request has no browser context to
+ * justify it.
  */
-function sameOrigin(request: IncomingMessage): boolean {
+function sameOrigin(request: IncomingMessage, requireOrigin: boolean): boolean {
   const host = request.headers.host
   if (host === undefined) return false
   if (String(request.headers["sec-fetch-site"] ?? "") === "cross-site") return false
   const origin = request.headers.origin
-  if (origin === undefined) return true
+  if (origin === undefined) return !requireOrigin
   try {
     return new URL(origin).host === new URL(`http://${host}`).host
   } catch {
@@ -54,6 +61,9 @@ export interface StatusDeps {
   provisioner: Provisioner
   paths: PathMapper
   config: SandboxConfig
+  worktrees?: WorktreeManager
+  /** The subagent service, once the deferred inject has seen it. */
+  subagents?: () => SubagentService | undefined
 }
 
 /** Register `/sandbox/api/*` and dispose it with the plugin fiber. */
@@ -62,11 +72,12 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
     kind: "prefix",
     path: "/sandbox/api",
     handler: async (request: IncomingMessage, response: ServerResponse) => {
-      if (!sameOrigin(request)) {
+      const isPost = request.method === "POST"
+      if (!sameOrigin(request, isPost)) {
         writeJson(request, response, 403, { ok: false, error: { code: "forbidden", message: "same-origin requests only" } })
         return
       }
-      if (request.method !== "GET" && request.method !== "HEAD") {
+      if (request.method !== "GET" && request.method !== "HEAD" && !isPost) {
         writeJson(request, response, 405, { ok: false, error: { code: "method-error", message: "method not allowed" } })
         return
       }
@@ -86,14 +97,104 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
         // The workspace comes from the session store, not the request: the chip
         // must not be able to ask about an arbitrary directory.
         const headerCwd = ctx.sessions?.get?.(sessionId)?.header?.cwd
+        const workspace = typeof headerCwd === "string" && headerCwd !== "" ? headerCwd : deps.config.workspaceRoot
+        // The raw checkout, not the worktree: the provisioner reports the
+        // container it actually has, and the worktree rides along below.
         const target: SandboxTarget = {
           sessionId,
           container: containerNameFor(sessionId),
-          workspace: typeof headerCwd === "string" && headerCwd !== "" ? headerCwd : deps.config.workspaceRoot,
+          workspace,
           shared: false,
         }
         const status: SandboxStatus = await deps.provisioner.status(target)
-        writeJson(request, response, 200, { ok: true, data: status })
+        if (action === "merge-request") {
+          if (!isPost) {
+            writeJson(request, response, 405, { ok: false, error: { code: "method-error", message: "merge-request requires POST" } })
+            return
+          }
+          if (deps.worktrees === undefined) {
+            writeJson(request, response, 409, {
+              ok: false,
+              error: { code: "worktree-off", message: "worktree mode is disabled, so this session has no branch to merge" },
+            })
+            return
+          }
+          const result = await deps.worktrees.mergeRequest(sessionId, workspace)
+          writeJson(request, response, 200, { ok: true, data: result })
+          return
+        }
+        if (action === "review") {
+          if (!isPost) {
+            writeJson(request, response, 405, { ok: false, error: { code: "method-error", message: "review requires POST" } })
+            return
+          }
+          const bundle = deps.worktrees === undefined
+            ? undefined
+            : await deps.worktrees.reviewFor(sessionId, workspace)
+          if (bundle === undefined) {
+            writeJson(request, response, 409, {
+              ok: false,
+              error: { code: "no-worktree", message: "this session has no git worktree to review yet (worktree mode is off, or no tool call has created one)" },
+            })
+            return
+          }
+          if (changesAreEmpty(bundle.changes)) {
+            writeJson(request, response, 409, {
+              ok: false,
+              error: { code: "no-changes", message: "this session has made no changes to review" },
+            })
+            return
+          }
+          const subagents = deps.subagents?.()
+          if (subagents === undefined) {
+            writeJson(request, response, 503, {
+              ok: false,
+              error: { code: "no-subagents", message: "the subagent service is not available" },
+            })
+            return
+          }
+          const provider = subagents.list()[0]
+          if (provider === undefined) {
+            writeJson(request, response, 503, {
+              ok: false,
+              error: { code: "no-subagents", message: "no subagent provider is registered" },
+            })
+            return
+          }
+          const parent = ctx.agents?.get?.(sessionId)
+          if (parent === undefined) {
+            writeJson(request, response, 409, {
+              ok: false,
+              error: { code: "no-agent", message: "this session has no live agent to delegate from" },
+            })
+            return
+          }
+          // Fire-and-forget: `start` resolves when the child's inbox accepts
+          // the prompt, not when the review finishes. The signal never
+          // aborts, so the reviewer runs to completion on its own.
+          const run = await subagents.start(provider, {
+            prompt: [{ type: "text", text: buildReviewPrompt(bundle.entry, bundle.changes) }],
+            parent,
+            signal: new AbortController().signal,
+            label: "code review",
+          })
+          writeJson(request, response, 200, {
+            ok: true,
+            data: { provider, childSessionId: run.localAgent?.session?.id },
+          })
+          return
+        }
+        // Read-only peek: opening a chat never runs `git worktree add`.
+        const worktree = await deps.worktrees?.info(sessionId, workspace)
+        const worktreeError = deps.worktrees?.failureFor(sessionId)
+        writeJson(request, response, 200, {
+          ok: true,
+          data: {
+            ...status,
+            ...(worktree === undefined ? {} : { worktree }),
+            ...(worktreeError === undefined ? {} : { worktreeError }),
+          },
+        })
       } catch (error) {
         const code = error instanceof SandboxUnavailableError ? error.code : "unknown"
         writeJson(request, response, 500, { ok: false, error: { code, message: (error as Error).message } })
