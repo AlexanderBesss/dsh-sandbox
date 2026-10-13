@@ -65,6 +65,12 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     // A container the engine still holds for a chat this app has open is not an
     // orphan, even when this process never provisioned it.
     isSessionLive: (sessionId) => ctx.sessions?.get?.(sessionId) !== undefined,
+    // And an archived chat gets no *new* container either: the archive set is
+    // durable, so a stale call naming an archived id is refused instead of
+    // resurrecting a box nothing owns.
+    isSessionArchived: (sessionId) =>
+      (ctx.get("workspaceRegistry") as { archivedSessionIds?: readonly string[] } | undefined)
+        ?.archivedSessionIds?.includes(sessionId) === true,
   })
   // Worktree mode is read live (it is a volatile option), so the manager is
   // always built; `ensure` is a no-op while the toggle is off.
@@ -110,6 +116,12 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
   ctx.on("workspace/session-stop", ({ sessionId }: { sessionId: string }) =>
     provisioner.releaseSession(sessionId),
   )
+
+  // A disposed session is gone for good: archived, deleted, or a subagent
+  // child whose run settled (the reviewer's container used to sit in its
+  // group until the idle TTL swept it). The store's teardown event covers
+  // every kind of exit, so the container leaves with its session.
+  ctx.on("session/disposed", (session: { id: string }) => provisioner.releaseSession(session.id))
 
   // The periodic sweep (archived conversations first, then the idle TTL) and
   // its shutdown cleanup.

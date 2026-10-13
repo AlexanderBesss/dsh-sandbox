@@ -21,7 +21,7 @@
 import { BootstrapLogger, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
 import type { SandboxConfig } from "../config.ts"
 import { PathMapper, type SandboxMount } from "./paths.ts"
-import { containerNameFor, COMPOSE_PROJECT_LABEL, CONTAINER_PREFIX, composeProjectFor, OWNERSHIP_LABEL, SESSION_LABEL, type SandboxTarget } from "./session.ts"
+import { containerNameFor, COMPOSE_PROJECT_LABEL, CONTAINER_PREFIX, composeProjectFor, DEFAULT_SESSION_ID, OWNERSHIP_LABEL, SESSION_LABEL, SandboxSessionError, type SandboxTarget } from "./session.ts"
 import { DockerTransport, failureDetail, isMissingContainerError, SandboxUnavailableError } from "./transport.ts"
 import type { WorktreeInfo } from "./worktrees.ts"
 
@@ -67,6 +67,15 @@ export interface ProvisionerHooks {
    * under a chat the user is looking at.
    */
   isSessionLive?(sessionId: string): boolean
+  /**
+   * True when the app has archived this conversation.
+   *
+   * An archived chat is not coming back until the user unarchives it, so a
+   * call naming one is stale (a header that outlived the chat, a replay, a
+   * race with the archive): refuse to raise a container for it rather than
+   * leave an unowned box behind for the TTL to clean up.
+   */
+  isSessionArchived?(sessionId: string): boolean
 }
 
 /** Fold a mount into one `docker run -v` argument. */
@@ -169,6 +178,24 @@ export class Provisioner {
   }
 
   /**
+   * Refuse to raise a container for a conversation the app has archived or
+   * already dropped. A dead id reaching this far means a stale caller (a
+   * session disposed mid-flight, or a header that outlived its chat); the
+   * shared agentless container is exempt because it belongs to no chat. The
+   * hooks answer only when the app actually reports the session, so an
+   * unwired hook never blocks provisioning.
+   */
+  private assertProvisionable(sessionId: string): void {
+    if (sessionId === DEFAULT_SESSION_ID) return
+    if (this.hooks.isSessionArchived?.(sessionId) === true) {
+      throw new SandboxSessionError("this conversation is archived, so it has no sandbox container", "SESSION_ARCHIVED")
+    }
+    if (this.hooks.isSessionLive?.(sessionId) === false) {
+      throw new SandboxSessionError("this conversation no longer exists, so it has no sandbox container", "SESSION_GONE")
+    }
+  }
+
+  /**
    * Make sure the conversation's container exists and is Running.
    *
    * Idempotent and concurrent-safe: parallel tool calls in one chat share a
@@ -181,6 +208,7 @@ export class Provisioner {
    * @returns the same target, now backed by a Running container.
    */
   async ensure(target: SandboxTarget, opts: { signal?: AbortSignal } = {}): Promise<SandboxTarget> {
+    this.assertProvisionable(target.sessionId)
     const entry = this.tracked.get(target.sessionId)
     if (entry) entry.lastUsedAt = Date.now()
     else this.tracked.set(target.sessionId, { target, lastUsedAt: Date.now(), bootstrapped: false })
