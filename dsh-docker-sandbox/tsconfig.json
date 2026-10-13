@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rewriteRelativeImportExtensions": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["src", "test", "tsdown.config.ts"]
+}

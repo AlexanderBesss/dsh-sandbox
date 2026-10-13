@@ -1,0 +1,145 @@
+import { describe, expect, it } from 'vitest'
+import { PathMapper, SandboxPathError } from '../src/paths.ts'
+
+const WINDOWS = 'F:\\Projects\\dsh-sandbox'
+const DRIVE = '/f/Projects/dsh-sandbox'
+
+describe('PathMapper.windowsToDrive', () => {
+  it('maps a drive letter to its mount point and flips separators', () => {
+    expect(PathMapper.windowsToDrive(WINDOWS)).toBe(DRIVE)
+    expect(PathMapper.windowsToDrive(`${WINDOWS}\\src\\a.ts`)).toBe(`${DRIVE}/src/a.ts`)
+  })
+
+  it('maps a bare drive root to its mount point', () => {
+    expect(PathMapper.windowsToDrive('C:\\')).toBe('/c')
+  })
+
+  it('leaves POSIX paths alone', () => {
+    expect(PathMapper.windowsToDrive('/workspace/src')).toBe('/workspace/src')
+    expect(PathMapper.windowsToDrive(DRIVE)).toBe(DRIVE)
+  })
+})
+
+describe('PathMapper.driveToWindows', () => {
+  it('maps a drive-backed container path back to Windows', () => {
+    expect(PathMapper.driveToWindows(`${DRIVE}\\src`)).toBe('F:\\Projects\\dsh-sandbox\\src')
+    expect(PathMapper.driveToWindows('/f')).toBe('F:\\')
+  })
+
+  it('returns undefined for paths with no Windows equivalent', () => {
+    expect(PathMapper.driveToWindows('/workspace')).toBeUndefined()
+    expect(PathMapper.driveToWindows('/tmp')).toBeUndefined()
+  })
+
+  it('accepts a drive letter in either case', () => {
+    expect(PathMapper.driveToWindows('/F/tmp/x')).toBe('F:\\tmp\\x')
+  })
+})
+
+describe('PathMapper.mountsFor (workspace mode)', () => {
+  const mapper = new PathMapper('workspace', '/workspace')
+
+  it('mounts exactly the session workspace at the container workspace', () => {
+    expect(mapper.mountsFor(WINDOWS)).toEqual([{ hostPath: WINDOWS, containerPath: '/workspace' }])
+  })
+
+  it('rejects a workspace that cannot be bind-mounted', () => {
+    expect(() => mapper.mountsFor('/home/me/project')).toThrowError(SandboxPathError)
+    expect(() => mapper.mountsFor('/home/me/project')).toThrow(/not a Windows absolute path/)
+  })
+})
+
+describe('PathMapper.mountsFor (drives mode)', () => {
+  const mapper = new PathMapper('drives', '/workspace')
+
+  it('mounts the session drive and C: at their container roots', () => {
+    expect(mapper.mountsFor(WINDOWS)).toEqual([
+      { hostPath: 'C:\\', containerPath: '/c' },
+      { hostPath: 'F:\\', containerPath: '/f' },
+    ])
+  })
+})
+
+describe('PathMapper.toContainer (workspace mode)', () => {
+  const mapper = new PathMapper('workspace', '/workspace')
+
+  it('accepts container, drive, Windows, and relative spellings of the same file', () => {
+    expect(mapper.toContainer('/workspace/src/a.ts', WINDOWS)).toBe('/workspace/src/a.ts')
+    expect(mapper.toContainer(`${DRIVE}/src/a.ts`, WINDOWS)).toBe('/workspace/src/a.ts')
+    expect(mapper.toContainer(`${WINDOWS}\\src\\a.ts`, WINDOWS)).toBe('/workspace/src/a.ts')
+    expect(mapper.toContainer('src/a.ts', WINDOWS)).toBe('/workspace/src/a.ts')
+  })
+
+  it('treats the empty path as the workspace root', () => {
+    expect(mapper.toContainer('', WINDOWS)).toBe('/workspace')
+    expect(mapper.toContainer('.', WINDOWS)).toBe('/workspace')
+  })
+
+  it('collapses . and .. inside the workspace', () => {
+    expect(mapper.toContainer('/workspace/src/../docs', WINDOWS)).toBe('/workspace/docs')
+  })
+
+  it('rejects an absolute path outside the mount instead of guessing', () => {
+    expect(() => mapper.toContainer('/etc/passwd', WINDOWS)).toThrowError(SandboxPathError)
+    expect(() => mapper.toContainer('/home/me/other', WINDOWS)).toThrow(/outside the sandbox mount/)
+  })
+
+  it('rejects a relative path that walks out of the workspace', () => {
+    try {
+      mapper.toContainer('../sibling', WINDOWS)
+      expect.unreachable('the escape should have been rejected')
+    } catch (error) {
+      expect(error).toBeInstanceOf(SandboxPathError)
+      expect((error as SandboxPathError).code).toBe('PATH_OUTSIDE_SANDBOX')
+    }
+  })
+})
+
+describe('PathMapper.toContainer (drives mode)', () => {
+  const mapper = new PathMapper('drives', '/workspace')
+
+  it('keeps a drive-backed path at its mounted location', () => {
+    expect(mapper.toContainer(`${WINDOWS}\\src\\a.ts`, WINDOWS)).toBe(`${DRIVE}/src/a.ts`)
+    expect(mapper.toContainer('/f/tmp/x', WINDOWS)).toBe('/f/tmp/x')
+  })
+
+  it('normalises a drive mount written with a capital letter', () => {
+    // `/F/x` and `/f/x` are one file: the mount point is always lower-cased.
+    expect(mapper.toContainer('/F/tmp/x', WINDOWS)).toBe('/f/tmp/x')
+  })
+
+  it('still rejects a path on no mount at all', () => {
+    expect(() => mapper.toContainer('/etc/passwd', WINDOWS)).toThrowError(SandboxPathError)
+  })
+})
+
+describe('PathMapper.toWindows', () => {
+  it('round-trips a container path back to the host view', () => {
+    const mapper = new PathMapper('workspace', '/workspace')
+    expect(mapper.toWindows('/workspace/src/a.ts', WINDOWS)).toBe(`${WINDOWS}\\src\\a.ts`)
+    expect(mapper.toWindows('/etc/passwd', WINDOWS)).toBeUndefined()
+  })
+
+  it('reports no host path when the anchor itself is not a Windows path', () => {
+    // `mountsFor` refuses this anchor; `toWindows` answers "no host file"
+    // instead, so a caller anchoring on a container path still gets a target.
+    const mapper = new PathMapper('workspace', '/workspace')
+    expect(mapper.toWindows('/workspace/src/a.ts', '/workspace')).toBeUndefined()
+  })
+
+  it('maps drive-mode paths directly', () => {
+    const mapper = new PathMapper('drives', '/workspace')
+    expect(mapper.toWindows('/f/tmp/x', WINDOWS)).toBe('F:\\tmp\\x')
+  })
+})
+
+describe('PathMapper.containerRoot', () => {
+  it('is the mount point in workspace mode', () => {
+    expect(new PathMapper('workspace', '/workspace').containerRoot(WINDOWS)).toBe('/workspace')
+  })
+
+  it('is the session drive root in drives mode', () => {
+    expect(new PathMapper('drives', '/workspace').containerRoot(WINDOWS)).toBe('/f')
+    expect(new PathMapper('drives', '/workspace').containerRoot()).toBe('/c')
+  })
+})

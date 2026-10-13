@@ -1,0 +1,3 @@
+# Local artifacts, never part of the repo.
+.pnpm-store/
+browser-screenshots/
