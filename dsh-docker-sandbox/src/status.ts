@@ -33,25 +33,27 @@ function writeJson(request: IncomingMessage, res: ServerResponse, status: number
 /**
  * Reject cross-site requests.
  *
- * A GET with no `Origin` header (curl, a form GET) passes: the read-only
- * endpoint names nothing an attacker could act on beyond container names, so
- * the guard is about the browser-driven chip, not a hard auth boundary. The
- * comparison is the full host (name *and* port): another app on the same host
- * but a different port is a different origin and gets refused.
- *
- * A POST (the merge-request action) is stricter: it changes state, so it
- * requires an `Origin` header that matches exactly — a cross-site form or
- * fetch cannot forge one, and a no-Origin request has no browser context to
- * justify it.
+ * The comparison is the full host (name *and* port): another app on the same
+ * host but a different port is a different origin and gets refused. The app's
+ * own renderer lives on the `dsh-app:` scheme and its fetches are bridged to
+ * this server carrying that origin (or, depending on the bridge, none), so a
+ * `dsh-app:` origin always passes and a missing `Origin` passes as well:
+ * browsers attach `Origin` to every POST, so a POST that reaches this route
+ * without one came from the bridge or from a local non-browser client - never
+ * from a cross-site web page, which is the only thing a CSRF guard can act
+ * on. A cross-site web page cannot forge or omit `Origin`, and `Sec-Fetch-Site`
+ * is checked first when the client reports it.
  */
-function sameOrigin(request: IncomingMessage, requireOrigin: boolean): boolean {
+export function sameOrigin(request: IncomingMessage): boolean {
   const host = request.headers.host
   if (host === undefined) return false
   if (String(request.headers["sec-fetch-site"] ?? "") === "cross-site") return false
   const origin = request.headers.origin
-  if (origin === undefined) return !requireOrigin
+  if (origin === undefined) return true
   try {
-    return new URL(origin).host === new URL(`http://${host}`).host
+    const parsed = new URL(origin)
+    if (parsed.protocol === "dsh-app:") return true
+    return parsed.host === new URL(`http://${host}`).host
   } catch {
     return false
   }
@@ -73,7 +75,7 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
     path: "/sandbox/api",
     handler: async (request: IncomingMessage, response: ServerResponse) => {
       const isPost = request.method === "POST"
-      if (!sameOrigin(request, isPost)) {
+      if (!sameOrigin(request)) {
         writeJson(request, response, 403, { ok: false, error: { code: "forbidden", message: "same-origin requests only" } })
         return
       }
