@@ -71,6 +71,34 @@ const WATCH_DEBOUNCE_MS = 150
 /** Directory entries stat'd per round trip; enough to pipeline, small enough to stay responsive to cancellation. */
 const STAT_BATCH = 64
 
+/**
+ * Adapt an edit's line endings to the file's dominant style, so a multi-line
+ * edit survives the read-normalize/edit round trip. The read tool shows the
+ * model line-normalized text (`\n`), but a `core.autocrlf` checkout stores
+ * `\r\n`; matching the model's spelling literally would fail on every
+ * multi-line edit of such a file. When the exact text is present it is used
+ * untouched; otherwise the edit is retried in the file's own endings.
+ *
+ * @param text - the file's current text, as stored.
+ * @param oldText - the text the model wants to replace.
+ * @param newText - the replacement.
+ * @returns the ending-adapted pair to match and splice with.
+ */
+export function endingsAdapted(text: string, oldText: string, newText: string): [string, string] {
+  if (oldText === "" || text.includes(oldText)) return [oldText, newText]
+  const fileHasCrlf = text.includes("\r\n")
+  const oldHasCrlf = oldText.includes("\r\n")
+  if (fileHasCrlf && !oldHasCrlf) {
+    const crlfOld = oldText.replace(/\r?\n/g, "\r\n")
+    if (text.includes(crlfOld)) return [crlfOld, newText.replace(/\r?\n/g, "\r\n")]
+  }
+  if (!fileHasCrlf && oldHasCrlf) {
+    const lfOld = oldText.replace(/\r\n/g, "\n")
+    if (text.includes(lfOld)) return [lfOld, newText.replace(/\r\n/g, "\n")]
+  }
+  return [oldText, newText]
+}
+
 export interface FsDeps {
   paths: PathMapper
   config: SandboxConfig
@@ -470,8 +498,14 @@ export class DockerFileSystem extends FileSystem {
     }
     // The seam hands down `oldString`/`newString` (dsh-tool-fs, str-replace
     // editor); accept the older `oldText`/`newText` spelling as well.
-    const oldText = edit.oldString ?? edit.oldText ?? ""
-    const newText = edit.newString ?? edit.newText ?? ""
+    const rawOld = edit.oldString ?? edit.oldText ?? ""
+    const rawNew = edit.newString ?? edit.newText ?? ""
+    // Line endings: the model reads line-normalized text, so a multi-line
+    // `oldString` carries `\n`, while a `core.autocrlf` checkout holds `\r\n`
+    // on disk - a literal match then fails ("the text to replace was not
+    // found") even though the read showed exactly that text. Adapt the edit's
+    // endings to the file's dominant style before matching.
+    const [oldText, newText] = endingsAdapted(text, rawOld, rawNew)
     const matches = text.split(oldText).length - 1
     if (matches === 0) {
       throw new FsError(`the text to replace was not found in "${target.displayPath}"`, "FS_AMBIGUOUS_EDIT")

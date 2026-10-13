@@ -189,6 +189,30 @@ describe.skipIf(posix)('DockerFileSystem reads and writes', () => {
     }
   })
 
+  it('matches a multi-line edit whose endings differ from the file (CRLF checkout)', async () => {
+    // The read tool shows LF-normalized text, so the model edits with `\n`;
+    // a core.autocrlf checkout stores `\r\n`. The edit must still land, and
+    // the file must keep its CRLF style.
+    const target = fs.resolve('crlf.json')
+    await writeFile(host('crlf.json'), '{\r\n  "version": "0.1.16"\r\n}\r\n')
+    const outcome = await fs.editText(target, {
+      oldString: '{\n  "version": "0.1.16"\n}',
+      newString: '{\n  "version": "0.1.17"\n}',
+    })
+    expect(outcome.replacements).toBe(1)
+    expect(await fs.readText(target)).toBe('{\r\n  "version": "0.1.17"\r\n}\r\n')
+  })
+
+  it('matches the other direction too (LF file, CRLF edit text)', async () => {
+    const target = fs.resolve('lf.json')
+    await writeFile(host('lf.json'), '{\n  "version": "0.1.16"\n}\n')
+    await fs.editText(target, {
+      oldString: '{\r\n  "version": "0.1.16"\r\n}',
+      newString: '{\r\n  "version": "0.1.17"\r\n}',
+    })
+    expect(await fs.readText(target)).toBe('{\n  "version": "0.1.17"\n}\n')
+  })
+
   it('refuses to create over an existing file without observing it', async () => {
     const target = fs.resolve('exists.txt')
     await fs.writeText(target, 'one')
