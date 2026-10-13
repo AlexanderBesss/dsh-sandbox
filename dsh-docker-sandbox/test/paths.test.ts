@@ -189,3 +189,44 @@ describe('extra mounts (worktree mode)', () => {
       .toThrowError(SandboxPathError)
   })
 })
+
+describe('worktree main-workspace alias', () => {
+  const worktree = 'F:\\Projects\\app.worktrees\\session-3'
+  const main = 'F:\\Projects\\app'
+
+  function aliasMapper(): PathMapper {
+    const mapper = new PathMapper('workspace', '/workspace')
+    mapper.registerExtraMount(worktree, {
+      mount: { hostPath: `${main}\\.git`, containerPath: '/f/Projects/app/.git' },
+      containerGitDir: '/f/Projects/app/.git/worktrees/session-3',
+      gitConfig: {},
+      aliasHost: main,
+    })
+    return mapper
+  }
+
+  it('resolves the main checkout (the session header cwd) to the container root', () => {
+    const mapper = aliasMapper()
+    expect(mapper.toContainer(main, worktree)).toBe('/workspace')
+    expect(mapper.toContainer('F:\\Projects\\app', worktree)).toBe('/workspace')
+    expect(mapper.toContainer('/f/Projects/app', worktree)).toBe('/workspace')
+  })
+
+  it('resolves paths under the main checkout into the worktree', () => {
+    const mapper = aliasMapper()
+    expect(mapper.toContainer('F:\\Projects\\app\\src\\x.ts', worktree)).toBe('/workspace/src/x.ts')
+    expect(mapper.toContainer('/f/Projects/app/src', worktree)).toBe('/workspace/src')
+  })
+
+  it('still prefers the real .git mount over the alias', () => {
+    expect(aliasMapper().toContainer('F:\\Projects\\app\\.git\\config', worktree))
+      .toBe('/f/Projects/app/.git/config')
+  })
+
+  it('does not alias sibling worktrees or unrelated paths', () => {
+    const mapper = aliasMapper()
+    expect(() => mapper.toContainer('F:\\Projects\\app.worktrees\\session-9\\x', worktree))
+      .toThrowError(SandboxPathError)
+    expect(() => mapper.toContainer('F:\\Other\\x', worktree)).toThrowError(SandboxPathError)
+  })
+})

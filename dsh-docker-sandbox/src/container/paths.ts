@@ -51,6 +51,14 @@ export interface ExtraMount {
   containerGitDir: string
   /** Host-effective git settings to mirror into the container (`GIT_CONFIG_*`). */
   gitConfig: Record<string, string>
+  /**
+   * The checkout the worktree was carved from. The app hands tools the
+   * session's original header cwd (the main checkout) as the working
+   * directory, so paths under it must resolve to the worktree — the session's
+   * project *is* the worktree, and without the alias every command would be
+   * rejected as outside the mount before the container is ever provisioned.
+   */
+  aliasHost?: string
 }
 
 /** A path that cannot be expressed inside the sandbox. */
@@ -228,6 +236,16 @@ export class PathMapper {
         const hostDrive = PathMapper.windowsToDrive(extra.mount.hostPath)
         if (raw === hostDrive || raw.startsWith(`${hostDrive}/`)) {
           return resolveSegments(`${mounted}${raw.slice(hostDrive.length)}`)
+        }
+        // The checkout the worktree was carved from aliases onto the worktree:
+        // the app passes the session's original header cwd to tools, and the
+        // session's project is its worktree.
+        if (extra.aliasHost !== undefined) {
+          const aliasDrive = PathMapper.windowsToDrive(extra.aliasHost)
+          if (raw === aliasDrive) return resolveSegments(root)
+          if (raw.startsWith(`${aliasDrive}/`)) {
+            return resolveSegments(`${root}${raw.slice(aliasDrive.length)}`)
+          }
         }
       }
       throw new SandboxPathError(

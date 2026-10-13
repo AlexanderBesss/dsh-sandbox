@@ -319,6 +319,7 @@ describe('WorktreeManager extra `.git` mount', () => {
     expect(extra!.mount.hostPath).toBe(`${repoRoot}/.git`)
     expect(extra!.mount.containerPath).toBe(PathMapper.windowsToDrive(`${repoRoot}/.git`))
     expect(extra!.containerGitDir).toBe(PathMapper.windowsToDrive(`${repoRoot}/.git/worktrees/session-3`))
+    expect(extra!.aliasHost).toBe(repoRoot)
   })
 
   it('re-registers the mount after a restart, from the registry alone', () => {

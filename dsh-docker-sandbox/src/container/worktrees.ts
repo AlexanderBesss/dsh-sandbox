@@ -434,6 +434,7 @@ export class WorktreeManager {
       mount: { hostPath: gitHost, containerPath: PathMapper.windowsToDrive(gitHost) },
       containerGitDir: PathMapper.windowsToDrive(entry.hostGitDir),
       gitConfig: entry.gitConfig,
+      aliasHost: entry.mainWorkspace,
     })
   }
 
