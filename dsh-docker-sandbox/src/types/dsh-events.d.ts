@@ -20,6 +20,15 @@ declare module "@deepseek-ai/cordis" {
      * @mode parallel
      */
     "workspace/session-stop"(payload: { sessionId: string }): void
+
+    /**
+     * Broadcast: the session store has torn a session down — archived,
+     * deleted, or a subagent child whose run settled. The teardown carries
+     * the dead session, so a container keyed to it can leave with it instead
+     * of waiting out the idle TTL.
+     * @mode broadcast
+     */
+    "session/disposed"(session: { id: string }): void
   }
 }
 

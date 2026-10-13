@@ -299,3 +299,51 @@ describe('Provisioner.runArgs with a worktree session', () => {
     expect(volumes).toContain('F:/Projects/dsh-sandbox.worktrees/session-3:/workspace')
   })
 })
+
+describe('Provisioner.ensure liveness guard', () => {
+  it('refuses to raise a container for an archived conversation', async () => {
+    const { provisioner, calls, target } = makeProvisioner(
+      { state: undefined },
+      {},
+      { isSessionArchived: (id) => id === 'session-3' },
+    )
+    await expect(provisioner.ensure(target)).rejects.toMatchObject({ code: 'SESSION_ARCHIVED' })
+    expect(calls.some((call) => call.args[0] === 'run')).toBe(false)
+  })
+
+  it('refuses a conversation the session store no longer holds', async () => {
+    const { provisioner, calls, target } = makeProvisioner(
+      { state: undefined },
+      {},
+      { isSessionLive: () => false },
+    )
+    await expect(provisioner.ensure(target)).rejects.toMatchObject({ code: 'SESSION_GONE' })
+    expect(calls.some((call) => call.args[0] === 'run')).toBe(false)
+  })
+
+  it('exempts the shared agentless container from the guard', async () => {
+    const { provisioner, calls } = makeProvisioner(
+      { state: undefined },
+      {},
+      { isSessionLive: () => false, isSessionArchived: () => true },
+    )
+    const shared = {
+      sessionId: 'default',
+      container: containerNameFor('default'),
+      workspace: WINDOWS,
+      shared: true,
+    }
+    await provisioner.ensure(shared)
+    expect(calls.some((call) => call.args[0] === 'run')).toBe(true)
+  })
+
+  it('provisions normally when the app reports the session live', async () => {
+    const { provisioner, calls, target } = makeProvisioner(
+      { state: undefined },
+      {},
+      { isSessionLive: () => true, isSessionArchived: () => false },
+    )
+    await provisioner.ensure(target)
+    expect(calls.some((call) => call.args[0] === 'run')).toBe(true)
+  })
+})

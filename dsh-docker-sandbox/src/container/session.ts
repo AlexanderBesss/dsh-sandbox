@@ -19,9 +19,9 @@ import type { SandboxContext } from "../context.ts"
 import type { SandboxConfig } from "../config.ts"
 import type { WorktreeManager } from "./worktrees.ts"
 
-/** A call that could not be attributed to a chat. */
+/** A call that could not be attributed to a live, unarchived chat. */
 export class SandboxSessionError extends Error {
-  constructor(message: string, readonly code: "NO_SESSION") {
+  constructor(message: string, readonly code: "NO_SESSION" | "SESSION_ARCHIVED" | "SESSION_GONE") {
     super(message)
     this.name = "SandboxSessionError"
   }
