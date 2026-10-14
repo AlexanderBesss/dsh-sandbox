@@ -35,7 +35,8 @@ interface Poller {
 }
 
 // One poll per session, shared by every header pill: each status call fans out
-// into several git invocations on the host, and four pills would quadruple it.
+// into several git invocations on the host, and one poll per pill would
+// multiply them.
 const pollers = new Map<string, Poller>()
 
 export function useSandboxStatus(sessionId: string): StatusSnapshot {
@@ -148,6 +149,43 @@ export interface PillButtonProps {
   disabled?: boolean
 }
 
+const pillBase = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  height: 22,
+  padding: "0 8px",
+  border: "1px solid var(--dsw-alias-border-l2)",
+  borderRadius: 11,
+  background: "var(--dsw-alias-bg-layer-1)",
+  color: "var(--dsw-alias-label-secondary)",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontSize: 11,
+  lineHeight: 1,
+} as const
+
+const pillLabel = {
+  maxWidth: 180,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+} as const
+
+function PillDot({ dotColor }: { dotColor: string }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 6,
+        height: 6,
+        borderRadius: "50%",
+        background: dotColor,
+        flex: "0 0 auto",
+      }}
+    />
+  )
+}
+
 export function PillButton({ label, title, dotColor, onClick, disabled }: PillButtonProps) {
   return (
     <button
@@ -156,34 +194,38 @@ export function PillButton({ label, title, dotColor, onClick, disabled }: PillBu
       title={title}
       disabled={disabled}
       style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        height: 22,
-        padding: "0 8px",
-        border: "1px solid var(--dsw-alias-border-l2)",
-        borderRadius: 11,
-        background: "var(--dsw-alias-bg-layer-1)",
-        color: "var(--dsw-alias-label-secondary)",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 11,
-        lineHeight: 1,
+        ...pillBase,
         cursor: disabled ? "wait" : "pointer",
       }}
     >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: dotColor,
-          flex: "0 0 auto",
-        }}
-      />
-      <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {label}
-      </span>
+      <PillDot dotColor={dotColor} />
+      <span style={pillLabel}>{label}</span>
     </button>
+  )
+}
+
+export interface PillLinkProps {
+  label: string
+  title: string
+  dotColor: string
+  href: string
+}
+
+export function PillLink({ label, title, dotColor, href }: PillLinkProps) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={title}
+      style={{
+        ...pillBase,
+        cursor: "pointer",
+        textDecoration: "none",
+      }}
+    >
+      <PillDot dotColor={dotColor} />
+      <span style={pillLabel}>{label}</span>
+    </a>
   )
 }

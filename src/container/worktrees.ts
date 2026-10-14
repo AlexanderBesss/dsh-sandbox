@@ -25,6 +25,7 @@ export interface WorktreeEntry {
   lockHash?: string
   notifiedBehind?: string
   notifiedMerging?: boolean
+  prUrl?: string
 }
 
 export interface WorktreeInfo {
@@ -36,6 +37,7 @@ export interface WorktreeInfo {
   merging: boolean
   conflicts?: string[]
   behind?: number
+  prUrl?: string
 }
 
 export interface ConflictBundle {
@@ -185,6 +187,7 @@ export class WorktreeManager {
       merging,
       ...(merging ? { conflicts } : {}),
       ...(behind === undefined ? {} : { behind }),
+      ...(entry.prUrl === undefined ? {} : { prUrl: entry.prUrl }),
     }
   }
 
@@ -492,6 +495,10 @@ export class WorktreeManager {
             ...(brief.title === undefined ? {} : { briefTitle: brief.title }),
           }),
     })
+    if (pr.prUrl !== undefined && entry.prUrl !== pr.prUrl) {
+      entry.prUrl = pr.prUrl
+      this.saveRegistry(entry.repoRoot)
+    }
 
     return {
       branch: entry.branch,
@@ -543,12 +550,34 @@ export class WorktreeManager {
         "--body", prBodyFor(described),
       ], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
       const prUrl = /https?:\/\/\S+/.exec(opened.stdout)?.[0]
-      return prUrl === undefined ? {} : { prUrl }
+      if (prUrl !== undefined) return { prUrl }
+      const recorded = await this.openPullRequestUrl(entry)
+      return recorded === undefined ? {} : { prUrl: recorded }
     } catch (error) {
+      // A second click after the request exists fails `pr create`; the link of
+      // the still-open request is what the button should show, so read it back.
+      const existing = await this.openPullRequestUrl(entry)
+      if (existing !== undefined) return { prUrl: existing }
       return {
         prError: error instanceof CliCommandError ? error.detail ?? error.message : String(error),
         compareUrl: compareUrlFor(remote, entry.branch),
       }
+    }
+  }
+
+  private async openPullRequestUrl(entry: WorktreeEntry): Promise<string | undefined> {
+    const gh = this.deps.gh
+    if (gh === undefined) return undefined
+    try {
+      // open-only: a merged or closed request must not be reported as the
+      // answer to this push — the new commits need a fresh request of their own.
+      const found = await gh.run(
+        ["pr", "list", "--state", "open", "--head", entry.branch, "--json", "url", "-q", ".[0].url"],
+        { cwd: entry.worktreePath, timeoutMs: PUSH_MS },
+      )
+      return /https?:\/\/\S+/.exec(found.stdout)?.[0]
+    } catch {
+      return undefined
     }
   }
 
@@ -801,6 +830,7 @@ export class WorktreeManager {
           if (typeof entry.gitConfig !== "object" || entry.gitConfig === null) {
             entry.gitConfig = this.hostGitConfig(entry.repoRoot)
           }
+          if (typeof entry.prUrl !== "string") entry.prUrl = undefined
           this.entries.set(sessionId, entry)
         }
       }

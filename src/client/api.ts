@@ -7,6 +7,7 @@ export interface WorktreeView {
   merging: boolean
   conflicts?: string[]
   behind?: number
+  prUrl?: string
 }
 
 export type SubagentKind = "review" | "resolve"

@@ -38,11 +38,15 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
 
   if (worktree === undefined) return null
 
-  const link = result?.prUrl ?? result?.compareUrl
+  const prUrl = result?.prUrl ?? worktree.prUrl
+  const opened = prUrl !== undefined
+  const done = phase === "done" || (phase === "idle" && opened)
+  const link = prUrl ?? result?.compareUrl
+
   const label = phase === "busy"
     ? "merging…"
-    : phase === "done"
-      ? result?.prUrl !== undefined
+    : done
+      ? opened
         ? "PR opened"
         : result?.pushed
           ? "pushed"
@@ -51,8 +55,7 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
         ? "retry merge"
         : "merge request"
 
-  const opened = result?.prUrl !== undefined
-  const dotColor = phase === "done"
+  const dotColor = done
     ? opened || result?.prError === undefined
       ? DOT.success
       : DOT.warn
@@ -65,7 +68,7 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
     worktree.unpushed ? "unpushed commits on the branch\n" : "",
     worktree.merging ? "mid-merge with main: resolve the conflicts in the chat first\n" : "",
     worktree.behind !== undefined && worktree.behind > 0 ? `${worktree.behind} commit(s) behind main\n` : "",
-    result?.prUrl === undefined ? "" : `pull request: ${result.prUrl}\n`,
+    prUrl === undefined ? "" : `pull request: ${prUrl}\n`,
     result?.prError === undefined ? "" : `no pull request: ${result.prError}\n`,
     result?.renamedFrom === undefined ? "" : `branch renamed from ${result.renamedFrom}\n`,
     result?.nameNote === undefined ? "" : `${result.nameNote}\n`,
