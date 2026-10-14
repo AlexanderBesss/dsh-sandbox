@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { cancelSubagent, fetchSandboxStatus, type SandboxStatusView, type SubagentKind } from "./api.ts"
 
 const POLL_MS = 15000
@@ -21,6 +21,10 @@ export function phaseDotColor(phase: PillPhase): string {
       : phase === "busy"
         ? DOT.warn
         : DOT.idle
+}
+
+export function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
 }
 
 interface StatusSnapshot {
@@ -53,7 +57,7 @@ export function useSandboxStatus(sessionId: string): StatusSnapshot {
         } catch (cause) {
           // Keep the last good status: the pills render nothing at all without a
           // worktree, so one failed poll would hide them for a whole interval.
-          shared.snapshot = { ...shared.snapshot, error: (cause as Error).message }
+          shared.snapshot = { ...shared.snapshot, error: errorMessage(cause) }
         }
         for (const listener of shared.listeners) listener(shared.snapshot)
       }
@@ -112,7 +116,7 @@ export function useSubagentRun(
       () => undefined,
       (cause: unknown) => {
         setStopping(false)
-        setStopError((cause as Error).message)
+        setStopError(errorMessage(cause))
       },
     )
   }, [kind, sessionId, stopping])
@@ -124,6 +128,47 @@ export function useSubagentRun(
     stop,
     ...(stopError === undefined ? {} : { stopError }),
   }
+}
+
+export function uniqueChildSessionIds(started: string | undefined, running: readonly string[]): string[] {
+  return [...new Set(
+    [started, ...running].filter((id): id is string => id !== undefined && id !== ""),
+  )]
+}
+
+export interface PillAction<T> {
+  phase: PillPhase
+  result: T | undefined
+  error: string | undefined
+  run: () => void
+}
+
+export function usePillAction<T>(request: (sessionId: string) => Promise<T>, sessionId: string): PillAction<T> {
+  const [phase, setPhase] = useState<PillPhase>("idle")
+  const [result, setResult] = useState<T | undefined>(undefined)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const busyRef = useRef(false)
+
+  const run = useCallback(() => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setPhase("busy")
+    setError(undefined)
+    void request(sessionId).then(
+      (next) => {
+        busyRef.current = false
+        setResult(next)
+        setPhase("done")
+      },
+      (cause: unknown) => {
+        busyRef.current = false
+        setError(errorMessage(cause))
+        setPhase("error")
+      },
+    )
+  }, [request, sessionId])
+
+  return { phase, result, error, run }
 }
 
 export function useCopied(): { copied: boolean; markCopied: () => void } {

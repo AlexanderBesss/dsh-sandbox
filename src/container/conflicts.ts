@@ -1,4 +1,5 @@
 import type { CliRunner } from "./git.ts"
+import { tryStdout } from "./git/output.ts"
 import type { WorktreeEntry } from "./worktrees.ts"
 
 const QUICK_MS = 15000
@@ -22,13 +23,8 @@ export interface ConflictFacts {
   diffPathsTruncated: boolean
 }
 
-async function gitText(git: CliRunner, args: string[], cwd: string, timeoutMs = QUICK_MS): Promise<string> {
-  try {
-    return (await git.run(args, { cwd, timeoutMs })).stdout
-  } catch {
-    return ""
-  }
-}
+const gitText = (git: CliRunner, args: string[], cwd: string, timeoutMs = QUICK_MS): Promise<string> =>
+  tryStdout(git, args, cwd, timeoutMs).then((stdout) => stdout ?? "")
 
 // -z keeps paths byte-exact: the default output C-quotes anything outside ASCII,
 // which would hand the resolver a filename that does not exist.

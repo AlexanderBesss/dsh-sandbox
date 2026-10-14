@@ -35,7 +35,7 @@ export class OutputTail {
   }
 
   get text(): string {
-    return this.readFrom(this.startOffset)?.text ?? ""
+    return this.readFrom(this.startOffset).text
   }
 
   readFrom(offset: number): { text: string; nextOffset: number; lossy: boolean } {

@@ -1,6 +1,6 @@
 import type { Context } from "@deepseek-ai/cordis"
 import { randomUUID } from "node:crypto"
-import type { DurableUserMessage, SandboxContext, SubagentService } from "./context.ts"
+import type { DurableUserMessage, SandboxContext, SubagentService, WorkspaceRegistryService } from "./context.ts"
 import { Config, type SandboxConfig } from "./config.ts"
 import { DockerFileSystem } from "./seams/fs.ts"
 import { startContainerGc } from "./container/gc.ts"
@@ -34,7 +34,7 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
   const provisioner = new Provisioner(transport, config, paths, ctx.logger, {
     isSessionLive: (sessionId) => ctx.sessions?.get?.(sessionId) !== undefined,
     isSessionArchived: (sessionId) =>
-      (ctx.get("workspaceRegistry") as { archivedSessionIds?: readonly string[] } | undefined)
+      (ctx.get("workspaceRegistry") as WorkspaceRegistryService | undefined)
         ?.archivedSessionIds?.includes(sessionId) === true,
     onContainerReady: (target) => warmInstall(target),
   })
@@ -106,18 +106,16 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     runs,
   })
 
-  const stopChildren = (sessionId: string): void => {
+  const releaseSession = (sessionId: string): void => {
     // Cancel before the container is released: an aborted child still has a turn
     // in flight, and a tool call from it would provision a fresh container.
     for (const handle of runs.cancelAll(sessionId)) {
       ctx.logger.info(`dsh-docker-sandbox: stopped the ${handle.kind} child ${handle.childSessionId} of session ${sessionId}`)
     }
+    provisioner.releaseSession(sessionId)
   }
 
-  ctx.on("workspace/session-stop", ({ sessionId }: { sessionId: string }) => {
-    stopChildren(sessionId)
-    provisioner.releaseSession(sessionId)
-  })
+  ctx.on("workspace/session-stop", ({ sessionId }: { sessionId: string }) => releaseSession(sessionId))
 
   const engineGate = createEngineGate(provisioner, config, {
     worktrees,
@@ -126,15 +124,14 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
   ctx.on("agent/pre-step", engineGate)
 
   ctx.on("session/disposed", (session: { id: string }) => {
-    stopChildren(session.id)
-    provisioner.releaseSession(session.id)
+    releaseSession(session.id)
     engineGate.forget(session.id)
   })
 
   startContainerGc(ctx, provisioner, config, worktrees)
 
   ctx.logger.info(
-    `dsh-docker-sandbox: shell, fs, subprocess and shell terminals now run in Docker `
+    "dsh-docker-sandbox: shell, fs, subprocess and shell terminals now run in Docker "
     + `(image ${config.image.get()}, mount ${config.mountMode}`
     + (config.worktree.get() ? ", worktree mode on" : "")
     + ")",

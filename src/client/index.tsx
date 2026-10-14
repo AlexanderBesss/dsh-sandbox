@@ -16,69 +16,89 @@ interface SlotRegistration {
   registrant?: string
 }
 
+interface SessionHeaderProps {
+  sessionId: string
+}
+
+interface PluginRowProps {
+  view: string
+  form?: RowConfigForm
+}
+
 export interface ClientContext {
   slots: {
     inject: (key: string, callback: () => (() => void) | void) => () => void
-    register: (registration: SlotRegistration, render: (props: any) => unknown) => () => void
+    register: <Props>(registration: SlotRegistration, render: (props: Props) => unknown) => () => void
   }
 }
+
+const REGISTRANT = "dsh-docker-sandbox"
+const HEADER_SLOT = "conversation.session.header.utilities"
+
+interface HeaderSlot {
+  id: string
+  order: number
+  label: string
+  render: (props: SessionHeaderProps) => unknown
+}
+
+const HEADER_SLOTS: HeaderSlot[] = [
+  {
+    id: "container",
+    order: 20,
+    label: "Sandbox container",
+    render: (props) => createElement(ContainerChip, { sessionId: props.sessionId }),
+  },
+  {
+    id: "merge",
+    order: 21,
+    label: "Merge request",
+    render: (props) => createElement(MergeRequestButton, { sessionId: props.sessionId }),
+  },
+  {
+    id: "pr-link",
+    order: 22,
+    label: "Pull request link",
+    render: (props) => createElement(PullRequestLink, { sessionId: props.sessionId }),
+  },
+  {
+    id: "resolve",
+    order: 23,
+    label: "Resolve conflicts",
+    render: (props) => createElement(ResolveConflictsButton, { sessionId: props.sessionId }),
+  },
+  {
+    id: "review",
+    order: 24,
+    label: "Review changes",
+    render: (props) => createElement(ReviewButton, { sessionId: props.sessionId }),
+  },
+  {
+    id: "subagent-stop",
+    order: 25,
+    label: "Stop subagent",
+    render: (props) => createElement(SubagentStopButton, { sessionId: props.sessionId }),
+  },
+]
 
 export const inject = ["slots"]
 
 export function apply(ctx: ClientContext): void {
-  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
-    name: "conversation.session.header.utilities",
-    id: "dsh-docker-sandbox:container",
-    order: 20,
-    label: "Sandbox container",
-    registrant: "dsh-docker-sandbox",
-  }, (props) => createElement(ContainerChip, { sessionId: props.sessionId })))
-
-  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
-    name: "conversation.session.header.utilities",
-    id: "dsh-docker-sandbox:merge",
-    order: 21,
-    label: "Merge request",
-    registrant: "dsh-docker-sandbox",
-  }, (props) => createElement(MergeRequestButton, { sessionId: props.sessionId })))
-
-  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
-    name: "conversation.session.header.utilities",
-    id: "dsh-docker-sandbox:pr-link",
-    order: 22,
-    label: "Pull request link",
-    registrant: "dsh-docker-sandbox",
-  }, (props) => createElement(PullRequestLink, { sessionId: props.sessionId })))
-
-  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
-    name: "conversation.session.header.utilities",
-    id: "dsh-docker-sandbox:resolve",
-    order: 23,
-    label: "Resolve conflicts",
-    registrant: "dsh-docker-sandbox",
-  }, (props) => createElement(ResolveConflictsButton, { sessionId: props.sessionId })))
-
-  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
-    name: "conversation.session.header.utilities",
-    id: "dsh-docker-sandbox:review",
-    order: 24,
-    label: "Review changes",
-    registrant: "dsh-docker-sandbox",
-  }, (props) => createElement(ReviewButton, { sessionId: props.sessionId })))
-
-  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
-    name: "conversation.session.header.utilities",
-    id: "dsh-docker-sandbox:subagent-stop",
-    order: 25,
-    label: "Stop subagent",
-    registrant: "dsh-docker-sandbox",
-  }, (props) => createElement(SubagentStopButton, { sessionId: props.sessionId })))
+  for (const slot of HEADER_SLOTS) {
+    ctx.slots.inject(HEADER_SLOT, () => ctx.slots.register({
+      name: HEADER_SLOT,
+      id: `${REGISTRANT}:${slot.id}`,
+      order: slot.order,
+      label: slot.label,
+      registrant: REGISTRANT,
+    }, slot.render))
+  }
 
   ctx.slots.inject("plugins.row.config", () => ctx.slots.register({
     name: "plugins.row.config",
     key: "dsh-docker-sandbox#docker-sandbox",
-    registrant: "dsh-docker-sandbox",
-  }, (props: { view: string; form?: RowConfigForm }) =>
+    registrant: REGISTRANT,
+  }, (props: PluginRowProps) =>
     props.view === "page" && props.form !== undefined
       ? createElement(SandboxConfigForm, { form: props.form })
       : props.view === "summary"

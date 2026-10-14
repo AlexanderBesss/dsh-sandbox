@@ -28,12 +28,18 @@ export function tokenOf(st: { size: number; mtimeMs: number }): FsVersion {
   return `${st.size}-${Math.floor(st.mtimeMs / 1000)}` as FsVersion
 }
 
+export function errnoCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as NodeJS.ErrnoException).code)
+    : undefined
+}
+
 export function isNotFound(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT"
+  return errnoCode(error) === "ENOENT"
 }
 
 export function isDirectory(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "EISDIR"
+  return errnoCode(error) === "EISDIR"
 }
 
 export function checkSignal(signal?: AbortSignal): void {

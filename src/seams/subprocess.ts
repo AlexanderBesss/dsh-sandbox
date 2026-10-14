@@ -57,7 +57,6 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
   }
 
   async resolveExecutable(name: string, cwd?: string): Promise<string> {
-    void cwd
     const target = resolveTarget(this.ctx, this.deps.config, this.deps.worktrees)
     await this.deps.provisioner.ensure(target)
     const result = await this.deps.transport.execInContainer(
@@ -97,8 +96,8 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
     const stdin = stdio.stdin === "ignore" ? undefined : new DeferredStdin()
 
     const envPairs = Object.entries(spec.env ?? {})
-      .filter(([, value]) => value !== undefined)
-      .map(([key, value]) => `${key}=${value as string}`)
+      .filter((entry): entry is [string, string] => entry[1] !== undefined)
+      .map(([key, value]) => `${key}=${value}`)
 
     const cwd = spec.cwd === undefined ? "-" : this.deps.paths.toContainer(spec.cwd, target.workspace)
 
@@ -148,17 +147,18 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
         : { exitCode: exit.code, signal: exit.signal, killed: false }
     })()
 
+    const finish = (): void => {
+      settled = true
+      if (escalationTimer !== undefined) clearTimeout(escalationTimer)
+      releaseWork()
+    }
     run.then(
       (result) => {
-        settled = true
-        if (escalationTimer !== undefined) clearTimeout(escalationTimer)
-        releaseWork()
+        finish()
         outcome.resolve(result)
       },
       (error: unknown) => {
-        settled = true
-        if (escalationTimer !== undefined) clearTimeout(escalationTimer)
-        releaseWork()
+        finish()
         stdoutStream?.end()
         stderrStream?.end()
         outcome.reject(error)
@@ -201,12 +201,12 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
           await outcome.promise.catch(() => undefined)
           return !escalated
         }
-        const settled = await raceAbort(
+        const exited = await raceAbort(
           outcome.promise.then(() => true, () => true),
           signal,
           () => false,
         )
-        return settled && !escalated
+        return exited && !escalated
       },
     }
   }
