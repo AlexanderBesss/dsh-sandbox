@@ -9,15 +9,15 @@ chat "session-3"  ──▶  container dsh-sbx-session-3  ──▶  /workspace 
 
 ## What it replaces
 
-The plugin re-registers these services, so everything already built on them moves into the container without further changes:
+The plugin replaces or adds these services, so everything already built on them moves into the container without further changes:
 
 | Service | Effect |
 | --- | --- |
 | `ctx.subprocess` | `spawn` / `exec` run inside the container; cancellation signals the container's process group |
-| `ctx.shell` | the shell tool runs `/bin/sh -lc` in the container; results carry `cwd`, `container` |
+| `ctx.shell` | the shell tool runs `shellArgv` (default `/bin/sh -lc`, auto-upgraded to `/bin/bash -lc` when bash is present) in the container; results carry `cwd`, `container` |
 | `ctx.fs` | read, write, stat, list run against the bind-mounted workspace **on the host** — same bytes, no container needed; watching works, so the sidebar tree live-updates |
 | `ctx.terminals` | a `shell` terminal backend backed by the container (registered only when the app exposes `terminals` to the plugin) |
-| `ctx.webServer` | `GET /sandbox/api/list`, `GET /sandbox/api/status?session=<id>`, `POST /sandbox/api/merge-request?session=<id>` for the UI |
+| `ctx.webServer` | `GET /sandbox/api/list`, `GET /sandbox/api/status?session=<id>`, `POST /sandbox/api/merge-request?session=<id>`, `POST /sandbox/api/review?session=<id>` for the UI |
 
 Because `ctx.fs` is replaced, the sidebar file tree, attachments, and `present` all see the container's view of the workspace too.
 
@@ -27,7 +27,7 @@ Because `ctx.fs` is replaced, the sidebar file tree, attachments, and `present` 
 - **The workspace is bind-mounted, not copied.** Docker Desktop shares Windows drives into its VM natively, so `F:\Projects\x` is mounted straight from the Windows path at `/workspace` — container writes are host writes. `mountMode: "drives"` mounts whole drives at `/c`, `/f`, … instead.
 - **File operations never touch the container.** The workspace is a bind mount, so `ctx.fs` reads and writes host files directly — same bytes, same version tokens, much faster — and *opening a chat* (the sidebar tree calls `ctx.fs` to render) never spawns a container. Containers spawn only for execution: shell commands, subprocesses (including the `rg` that `glob` / `grep` spawn), and terminal sessions.
 - **The docker CLI is spawned directly** (`docker.exe` on PATH): no WSL hop, no kubeconfig, no in-guest shell. Commands travel as argv, never through a shell string; multi-line payloads through stdin. One small agent (`agent/run.sh`) is uploaded once per container — a `docker exec` round trip costs a noticeable fraction of a second — and commands run through a runner that records a pidfile so they can be stopped later.
-- **Idle and archived containers are collected.** Archiving a chat deletes its container: a busy chat fires the app's `workspace/session-stop` hook (the same seam the agent and job owners use), an idle one is caught by the GC sweep reading the registry's archive set — gone within one `gcIntervalMs` (default 60 s). Unarchiving re-provisions lazily on the next tool call. A container unused for `idleTtlMs` (default 2 h) is deleted too, along with orphans from earlier runs matched by the `dsh.sandbox=1` label. Neither sweep touches a container with work still running in it — a build, an install, an open terminal outlives `idleTtlMs` without losing its box — or one whose conversation the app still holds open.
+- **Idle and archived containers are collected.** Archiving a chat deletes its container: a busy chat fires the app's `workspace/session-stop` hook (the same seam the agent and job owners use), an idle one is caught by the GC sweep reading the registry's archive set — gone within one `gcIntervalMs` (default 60 s). Unarchiving re-provisions lazily on the next tool call. A container unused for `idleTtlMs` (default 2 h) is deleted too, along with orphans from earlier runs matched by the `dsh.sandbox=1` label. Neither sweep touches a container with work still running in it — a build, an install, an open terminal outlives `idleTtlMs` without losing its box — and the orphan sweep additionally spares a container whose conversation the app still holds open.
 - **It fails closed.** If the Docker daemon is unreachable, tool calls fail with a named error (`DOCKER_MISSING`, `DOCKER_UNREACHABLE`, `EXEC_TIMEOUT`); nothing falls back to the host. In worktree mode the engine is probed before each step, and an unreachable one ends the turn with a "start the Docker engine" error instead of the chat quietly answering against the host checkout.
 
 ## Install
@@ -50,7 +50,7 @@ The client bundle (`lib/client.js`) is loaded lazily by the app and adds the con
 
 ## Enable / disable
 
-Toggling the plugin (plugin manager, or a `- id: docker-sandbox` / `disabled: true` row in the profile's `cordis.patch.yml`) is safe across restarts: the `docker-sandbox-host-restore` entry shipped by the bundle patch notices the sandbox entry is disabled and restores the withdrawn host providers (`pwsh-sandbox`, `subprocess`, `fs-sandbox`), so the harness falls back to host execution instead of leaving every tool waiting — including on a live toggle-off, without a restart. The watchdog also carries a shim for an app bug (as of 0.2.0-rc.2): a live re-composition re-applies `session-controller` before its previous instance is disposed, and the shipped `registerAgentResolver` guard turns that race into a fatal error that takes `session/create` down with it; the shim makes re-registration replace the stale resolver instead of throwing. It patches the service prototype process-wide, so it stays in place even after the sandbox entry is disabled — harmless (it only relaxes a guard that misfires) — and disappears on the next app restart. If a toggle ever does leave the app unhealthy: close the app, replace the profile's generated `cordis.yml` (the loader's tree write-back, not meant to be hand-edited) with its empty root list (header comment + `[]`), and reopen — the tree recomposes from `package.json` bundles plus `cordis.patch.yml`.
+Toggling the plugin (plugin manager, or a `- id: docker-sandbox` / `disabled: true` row in the profile's `cordis.patch.yml`) is safe across restarts: the `docker-sandbox-host-restore` entry shipped by the bundle patch notices the sandbox entry is disabled and restores the withdrawn host providers (`pwsh-sandbox`, `subprocess`, `fs-sandbox`), so the harness falls back to host execution instead of leaving every tool waiting — including on a live toggle-off, without a restart. The patch also disables the Pwsh tool (`tool-pwsh`), which restore does not re-enable: after disabling the sandbox, the Pwsh tool stays gone and the model uses the Bash tool. The watchdog also carries a shim for an app bug (as of 0.2.0-rc.2): a live re-composition re-applies `session-controller` before its previous instance is disposed, and the shipped `registerAgentResolver` guard turns that race into a fatal error that takes `session/create` down with it; the shim makes re-registration replace the stale resolver instead of throwing. It patches the service prototype process-wide, so it stays in place even after the sandbox entry is disabled — harmless (it only relaxes a guard that misfires) — and disappears on the next app restart. If a toggle ever does leave the app unhealthy: close the app, replace the profile's generated `cordis.yml` (the loader's tree write-back, not meant to be hand-edited) with its empty root list (header comment + `[]`), and reopen — the tree recomposes from `package.json` bundles plus `cordis.patch.yml`.
 
 ## Configuration
 
@@ -70,7 +70,7 @@ Toggling the plugin (plugin manager, or a `- id: docker-sandbox` / `disabled: tr
 | `shellArgv` | `["/bin/sh","-lc"]` | how shell commands are started |
 | `pwshGuard` | `true` | redirect the Pwsh tool to the Bash tool instead of running PowerShell text in `sh`; set `false` only for images that actually carry `pwsh` |
 | `bootstrapTools` | `true` | install `ripgrep` into the container on first use |
-| `ripgrepSource` | `package` | `package` uses the image's package manager; `url` downloads a static musl build |
+| `ripgrepSource` | `package` | `package` uses the image's package manager; `url` downloads a static musl build; `none` skips the install |
 | `idleTtlMs` | `7200000` | delete a container after this much idleness |
 | `gcIntervalMs` | `60000` | how often to sweep |
 | `terminalPty` | `false` | request a TTY for terminal sessions |
