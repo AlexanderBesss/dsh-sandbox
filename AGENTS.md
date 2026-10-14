@@ -26,23 +26,27 @@ installed copy is told apart from the source tree — an unchanged version means
 a stale install is invisible. After bumping, rebuild (`npm run build`) so the
 artifacts and the version ship together.
 
-## Comments: only when necessary
+## Comments: default is none
 
-Do not add a comment unless it carries something the code itself cannot carry.
-A reader who can name the thing from its identifier needs no prose.
+Assume the code needs no comment. The burden of proof is on the comment: add
+one only when it carries something the code itself cannot carry, and if
+deleting it would lose nothing, do not write it. A reader who can name the
+thing from its identifier needs no prose.
 
-- No comment restating the code, narrating the steps, or introducing a block
-  ("as you can see", "first we validate…", section banners).
-- No comment recording that a change was made, for whom, or when — that is
-  what git history is for.
-- Do comment the *why* when it is not in the code: an invariant, a constraint
-  arriving from outside, a workaround, a hazard, an ordering rule. One or two
-  lines, next to the line that needs it.
+- Never restate the code, narrate the steps, or introduce a block ("as you can
+  see", "first we validate…", section banners). A comment that only echoes the
+  code is noise — do not add it, and delete one only on lines you modify.
+- Never record that a change was made, for whom, or when — that is what git
+  history is for.
+- The only new comment allowed is the *why* that is not in the code: an
+  invariant, a constraint arriving from outside, a workaround, a hazard, an
+  ordering rule. One or two lines, next to the line that needs it. The same
+  test applies to prose added inside an existing comment.
 - Match the file's existing density. Where a file already documents its modules
   and exported functions (this repo's style), keep that documentation and update
   it with the change; do not add narration inside function bodies on top of it.
 - When a change makes a comment wrong, fix or delete the comment in the same
-  edit.
+  edit. A stale comment is a defect, not documentation debt.
 
 ## TypeScript: no `any`
 
