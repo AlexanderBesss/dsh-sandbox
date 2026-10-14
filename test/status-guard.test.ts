@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { handleMergeRequest, handleResolveConflicts, handleReview, createResolverGuard, registerStatusRoute, sameOrigin, type StatusDeps } from '../src/status.ts'
+import { handleMergeRequest, handleResolveConflicts, handleReview, createResolverGuard, createSubagentRunRegistry, registerStatusRoute, sameOrigin, type StatusDeps } from '../src/status.ts'
 import type { SandboxContext, WebRoute } from '../src/context.ts'
 
 function request(headers: Record<string, string>): IncomingMessage {
@@ -96,9 +96,10 @@ describe('handleReview', () => {
   }
   const changes = { log: 'abc123 fix', status: '', diff: '+x', truncated: false }
 
-  function depsFor(bundle: unknown, subagents?: () => unknown): StatusDeps {
+  function depsFor(bundle: unknown, subagents?: () => unknown, runs = createSubagentRunRegistry()): StatusDeps {
     return {
       worktrees: { reviewFor: async () => bundle },
+      runs,
       ...(subagents === undefined ? {} : { subagents }),
     } as unknown as StatusDeps
   }
@@ -183,10 +184,16 @@ const midMerge = {
   diffPathsTruncated: false,
 }
 
-function resolveDepsFor(bundle: unknown, subagents?: () => unknown, resolvers = createResolverGuard()): StatusDeps {
+function resolveDepsFor(
+  bundle: unknown,
+  subagents?: () => unknown,
+  resolvers = createResolverGuard(),
+  runs = createSubagentRunRegistry(),
+): StatusDeps {
   return {
     worktrees: { conflictsFor: async () => bundle },
     resolvers,
+    runs,
     ...(subagents === undefined ? {} : { subagents }),
   } as unknown as StatusDeps
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { fetchSandboxStatus, type SandboxStatusView } from "./api.ts"
+import { cancelSubagent, fetchSandboxStatus, type SandboxStatusView, type SubagentKind } from "./api.ts"
 
 const POLL_MS = 15000
 const COPIED_RESET_MS = 1500
@@ -75,6 +75,54 @@ export function useSandboxStatus(sessionId: string): StatusSnapshot {
   }, [sessionId])
 
   return snapshot
+}
+
+export interface SubagentRunState {
+  running: boolean
+  cancelling: boolean
+  childSessionIds: string[]
+  stop: () => void
+  stopError?: string
+}
+
+// The host keeps every started child in a registry and reports it through the
+// status poll, so a pill can stop a run this tab did not start — including one
+// that survived a reload. `stopping` covers the window between the cancel
+// request and the poll that shows the child gone.
+export function useSubagentRun(
+  status: SandboxStatusView | undefined,
+  sessionId: string,
+  kind: SubagentKind,
+): SubagentRunState {
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState<string | undefined>(undefined)
+  const held = (status?.subagents ?? []).filter((run) => run.kind === kind)
+  const runningCount = held.length
+
+  useEffect(() => {
+    if (runningCount === 0) setStopping(false)
+  }, [runningCount])
+
+  const stop = useCallback(() => {
+    if (stopping) return
+    setStopping(true)
+    setStopError(undefined)
+    void cancelSubagent(sessionId, kind).then(
+      () => undefined,
+      (cause: unknown) => {
+        setStopping(false)
+        setStopError((cause as Error).message)
+      },
+    )
+  }, [kind, sessionId, stopping])
+
+  return {
+    running: runningCount > 0,
+    cancelling: stopping || held.some((run) => run.cancelling),
+    childSessionIds: held.map((run) => run.childSessionId),
+    stop,
+    ...(stopError === undefined ? {} : { stopError }),
+  }
 }
 
 export function useCopied(): { copied: boolean; markCopied: () => void } {

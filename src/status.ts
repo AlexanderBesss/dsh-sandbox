@@ -149,6 +149,85 @@ export function createResolverGuard(now: () => number = Date.now): ResolverGuard
   }
 }
 
+export type SubagentKind = "review" | "resolve"
+
+export interface SubagentHandle {
+  kind: SubagentKind
+  childSessionId: string
+  controller: AbortController
+  startedAt: number
+  cancelling: boolean
+  cancelledAt?: number
+}
+
+export interface SubagentView {
+  kind: SubagentKind
+  childSessionId: string
+  startedAt: number
+  cancelling: boolean
+}
+
+// A started child is kept here so the header pill can offer to stop it: the
+// subagent service only cancels a run through the AbortSignal handed to start,
+// so the controller has to outlive the request that started the run. Entries
+// leave when the run settles, which an abort also causes.
+// A child that ignores the abort and never settles would otherwise pin the pill
+// in "stopping…" for the rest of the session, so a cancelled entry stops being
+// reported after this much time — the same escape the resolver slot has.
+const CANCEL_REPORT_TTL_MS = 60_000
+
+export interface SubagentRunRegistry {
+  track(sessionId: string, kind: SubagentKind, controller: AbortController, childSessionId: string): SubagentHandle
+  release(sessionId: string, handle: SubagentHandle): void
+  running(sessionId: string): SubagentHandle[]
+  cancel(sessionId: string, kind: SubagentKind): SubagentHandle[]
+  cancelAll(sessionId: string): SubagentHandle[]
+}
+
+export function createSubagentRunRegistry(now: () => number = Date.now): SubagentRunRegistry {
+  const running = new Map<string, Set<SubagentHandle>>()
+  const abortMatching = (sessionId: string, matches: (handle: SubagentHandle) => boolean): SubagentHandle[] => {
+    const held = running.get(sessionId)
+    if (held === undefined) return []
+    const hit = [...held].filter(matches)
+    for (const handle of hit) {
+      handle.cancelling = true
+      handle.cancelledAt = now()
+      handle.controller.abort()
+    }
+    return hit
+  }
+  return {
+    track: (sessionId, kind, controller, childSessionId) => {
+      const handle: SubagentHandle = { kind, childSessionId, controller, startedAt: now(), cancelling: false }
+      const held = running.get(sessionId) ?? new Set<SubagentHandle>()
+      held.add(handle)
+      running.set(sessionId, held)
+      return handle
+    },
+    release: (sessionId, handle) => {
+      const held = running.get(sessionId)
+      if (held === undefined) return
+      held.delete(handle)
+      if (held.size === 0) running.delete(sessionId)
+    },
+    running: (sessionId) => [...(running.get(sessionId) ?? [])].filter(
+      (handle) => handle.cancelledAt === undefined || now() - handle.cancelledAt <= CANCEL_REPORT_TTL_MS,
+    ),
+    cancel: (sessionId, kind) => abortMatching(sessionId, (handle) => handle.kind === kind),
+    cancelAll: (sessionId) => abortMatching(sessionId, () => true),
+  }
+}
+
+export function subagentViews(handles: SubagentHandle[]): SubagentView[] {
+  return handles.map((handle) => ({
+    kind: handle.kind,
+    childSessionId: handle.childSessionId,
+    startedAt: handle.startedAt,
+    cancelling: handle.cancelling,
+  }))
+}
+
 export interface StatusDeps {
   provisioner: Provisioner
   paths: PathMapper
@@ -156,6 +235,7 @@ export interface StatusDeps {
   worktrees?: WorktreeManager
   subagents?: () => SubagentService | undefined
   resolvers: ResolverGuard
+  runs: SubagentRunRegistry
 }
 
 type Respond = (status: number, body: unknown) => void
@@ -248,14 +328,17 @@ export async function handleReview(
   }
   const launch = subagentLaunch(respond, ctx, deps, sessionId)
   if (launch === undefined) return
+  const controller = new AbortController()
   const run = await launch.subagents.start(launch.provider, {
     prompt: [{ type: "text", text: buildReviewPrompt(bundle.entry, bundle.changes) }],
     parent: launch.parent,
-    signal: new AbortController().signal,
+    signal: controller.signal,
     label: "code review",
   })
   const childSessionId = run.localAgent?.session?.id ?? ""
+  const handle = deps.runs.track(sessionId, "review", controller, childSessionId)
   void settleSubagentRun(ctx, run, sessionId, childSessionId, REVIEW_SETTLEMENT)
+    .finally(() => deps.runs.release(sessionId, handle))
   respond(200, { ok: true, data: { provider: launch.provider, childSessionId } })
 }
 
@@ -314,11 +397,12 @@ export async function handleResolveConflicts(
     return
   }
   let run: SubagentRun
+  const controller = new AbortController()
   try {
     run = await launch.subagents.start(launch.provider, {
       prompt: [{ type: "text", text: buildConflictPrompt(bundle.entry, bundle.facts) }],
       parent: launch.parent,
-      signal: new AbortController().signal,
+      signal: controller.signal,
       label: "conflict resolution",
     })
   } catch (error) {
@@ -326,9 +410,51 @@ export async function handleResolveConflicts(
     throw error
   }
   const childSessionId = run.localAgent?.session?.id ?? ""
+  const handle = deps.runs.track(sessionId, "resolve", controller, childSessionId)
   void settleSubagentRun(ctx, run, sessionId, childSessionId, CONFLICT_SETTLEMENT)
-    .finally(() => slot.release())
+    .finally(() => {
+      deps.runs.release(sessionId, handle)
+      slot.release()
+    })
   respond(200, { ok: true, data: { provider: launch.provider, childSessionId, conflicts: bundle.facts.conflicts.length } })
+}
+
+const CANCEL_LABEL: Record<SubagentKind, string> = {
+  review: "review",
+  resolve: "resolver",
+}
+
+export function subagentKindOf(value: string | null): SubagentKind | undefined {
+  return value === "review" || value === "resolve" ? value : undefined
+}
+
+export async function handleCancelSubagent(
+  respond: Respond,
+  deps: StatusDeps,
+  sessionId: string,
+  kind: SubagentKind | undefined,
+  isPost: boolean,
+): Promise<void> {
+  if (!isPost) {
+    respond(405, { ok: false, error: { code: "method-error", message: "cancel-subagent requires POST" } })
+    return
+  }
+  if (kind === undefined) {
+    respond(400, { ok: false, error: { code: "bad-request", message: "kind must be review or resolve" } })
+    return
+  }
+  const handles = deps.runs.cancel(sessionId, kind)
+  if (handles.length === 0) {
+    respond(409, {
+      ok: false,
+      error: { code: "no-run", message: `no ${CANCEL_LABEL[kind]} is running for this session` },
+    })
+    return
+  }
+  respond(200, {
+    ok: true,
+    data: { cancelled: handles.length, childSessionIds: handles.map((handle) => handle.childSessionId) },
+  })
 }
 
 export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void {
@@ -374,6 +500,10 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
           await handleResolveConflicts(respond, ctx, deps, sessionId, workspace, isPost)
           return
         }
+        if (action === "cancel-subagent") {
+          await handleCancelSubagent(respond, deps, sessionId, subagentKindOf(url.searchParams.get("kind")), isPost)
+          return
+        }
         const target: SandboxTarget = {
           sessionId,
           container: containerNameFor(sessionId),
@@ -383,12 +513,14 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
         const status: SandboxStatus = await deps.provisioner.status(target)
         const worktree = await deps.worktrees?.info(sessionId, workspace)
         const worktreeError = deps.worktrees?.failureFor(sessionId)
+        const subagents = subagentViews(deps.runs.running(sessionId))
         respond(200, {
           ok: true,
           data: {
             ...status,
             ...(worktree === undefined ? {} : { worktree }),
             ...(worktreeError === undefined ? {} : { worktreeError }),
+            ...(subagents.length === 0 ? {} : { subagents }),
           },
         })
       } catch (error) {
