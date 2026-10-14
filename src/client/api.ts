@@ -18,6 +18,13 @@ export interface SubagentView {
   cancelling: boolean
 }
 
+export interface SubagentChildView {
+  parentSessionId: string
+  kind: SubagentKind
+  startedAt: number
+  cancelling: boolean
+}
+
 export interface SandboxStatusView {
   container: string
   image: string
@@ -31,6 +38,7 @@ export interface SandboxStatusView {
   worktree?: WorktreeView
   worktreeError?: string
   subagents?: SubagentView[]
+  subagentChild?: SubagentChildView
 }
 
 export interface MergeRequestView {
