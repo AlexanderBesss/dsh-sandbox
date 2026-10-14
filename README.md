@@ -57,7 +57,7 @@ Toggling the plugin (plugin manager, or a `- id: docker-sandbox` / `disabled: tr
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `dockerArgv` | `["docker"]` | the docker CLI invocation; full path if PATH does not carry it |
-| `image` | `alpine:3.20` | image for each chat container |
+| `image` | `node:24` | image for each chat container (default changed from `alpine:3.20` in 0.3.0: a ~1.2 GB pull instead of ~50 MB, `apt` instead of `apk`; existing containers keep their image until the GC recreates them) |
 | `command` | `["sleep","infinity"]` | keeps the container alive between calls |
 | `mountMode` | `workspace` | `workspace` bind-mounts just the chat's workspace; `drives` mounts `C:\` and the workspace drive at `/c`, `/f`, … |
 | `containerWorkspace` | `/workspace` | where the workspace appears in the container |
@@ -71,6 +71,10 @@ Toggling the plugin (plugin manager, or a `- id: docker-sandbox` / `disabled: tr
 | `pwshGuard` | `true` | redirect the Pwsh tool to the Bash tool instead of running PowerShell text in `sh`; set `false` only for images that actually carry `pwsh` |
 | `bootstrapTools` | `true` | install `ripgrep` into the container on first use |
 | `ripgrepSource` | `package` | `package` uses the image's package manager; `url` downloads a static musl build; `none` skips the install |
+| `bootstrapPlaywright` | `true` | install the Playwright CLI and browsers into the container on first use; skipped when the image already carries them or lacks `npm`/root; the first command pays the install (a few minutes; browsers are not shared between containers — bake them into a custom image to avoid it) |
+| `playwrightBrowsers` | `["chromium"]` | browsers passed to `playwright install --with-deps` (`chromium`, `firefox`, `webkit`) |
+| `playwrightVersion` | `1.64.1` | npm version pinned for the bootstrap install, so containers provisioned months apart match; empty installs the latest |
+| `playwrightInstallTimeoutMs` | `600000` | budget for the first-time Playwright install; a failure warns in the log and leaves the container running without Playwright |
 | `idleTtlMs` | `7200000` | delete a container after this much idleness |
 | `gcIntervalMs` | `60000` | how often to sweep |
 | `terminalPty` | `false` | request a TTY for terminal sessions |

@@ -1,7 +1,7 @@
 
 import { mkdirSync } from "node:fs"
 import { raceAbort } from "../utils/abort-race.ts"
-import { BootstrapLogger, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
+import { BootstrapLogger, installPlaywright, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
 import type { SandboxConfig } from "../config.ts"
 import { PathMapper, type SandboxMount } from "./paths.ts"
 import { containerNameFor, COMPOSE_PROJECT_LABEL, CONTAINER_PREFIX, composeProjectFor, DEFAULT_SESSION_ID, OWNERSHIP_LABEL, SESSION_LABEL, SandboxSessionError, type SandboxTarget } from "./session.ts"
@@ -291,6 +291,17 @@ export class Provisioner {
 
     if (this.config.bootstrapTools === true && facts.rgMissing && this.config.ripgrepSource !== "none") {
       await installRipgrep(this.transport, target, this.config.ripgrepSource, this.logger)
+    }
+
+    if (this.config.bootstrapPlaywright === true && facts.playwrightMissing) {
+      await installPlaywright(
+        this.transport,
+        target,
+        this.config.playwrightBrowsers,
+        this.config.playwrightVersion,
+        this.config.playwrightInstallTimeoutMs,
+        this.logger,
+      )
     }
 
     if (entry) entry.bootstrapped = true
