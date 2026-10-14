@@ -1,6 +1,6 @@
 {
   "name": "dsh-docker-sandbox",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Per-chat Docker container sandbox for DeepSeek Harness: every shell command, file operation, and terminal session runs inside a dedicated container on the local Docker engine, and the session header shows which container the chat is running in.",
   "type": "module",
   "main": "lib/index.js",

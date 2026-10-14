@@ -298,11 +298,12 @@ describe('WorktreeManager.mergeRequest', () => {
     expect(create[create.indexOf('--head') + 1]).toBe(result.branch)
     expect(create[create.indexOf('--title') + 1]).toBe('Fix the login crash')
     const body = create[create.indexOf('--body') + 1]!
-    expect(body).toContain('**Fix the login crash**')
-    expect(body).toContain('commit `deadbeefcafe`')
+    expect(body).toContain('## Commits (2)')
     expect(body).toContain('abc1234 fix the login crash')
     expect(body).not.toContain('src/login.ts | 12')
-    expect(body).toContain('committed the worktree')
+    expect(body).not.toContain('session-3')
+    expect(body).not.toContain('deadbeefcafe')
+    expect(body).not.toContain('committed the worktree')
   })
 
   it('renames the branch to what the change is about, before pushing it', async () => {
@@ -419,7 +420,7 @@ describe('WorktreeManager.mergeRequest', () => {
     await manager.mergeRequest('session-3', repoRoot)
     const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
     const body = create[create.indexOf('--body') + 1]!
-    expect(body).toContain("the main checkout's `HEAD`")
+    expect(body).toContain('## Commits (1)')
     expect(body).toContain('abc1234 work')
     expect(create[create.indexOf('--title') + 1]).toBe('dsh-sbx/session-3')
   })

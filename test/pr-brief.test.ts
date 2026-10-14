@@ -13,15 +13,12 @@ import { testConfig } from './helpers.ts'
 
 function facts(overrides: Partial<PullRequestFacts> = {}): PullRequestFacts {
   return {
-    sessionId: 'session-3',
     branch: 'dsh-sbx/also-when-we-create-a-branch-1a2b3c',
     worktreePath: 'F:\\Projects\\repo.worktrees\\also-when-we-create-a-branch-1a2b3c',
     mainWorkspace: 'F:\\Projects\\repo',
-    container: 'dsh-sbx-session-3',
     base: 'deadbeefcafe',
     log: 'abc1234 name the branch from the content',
     stat: ' src/container/worktrees.ts | 40 +++++++',
-    committed: true,
     title: 'Also, when we create a branch',
     ...overrides,
   }

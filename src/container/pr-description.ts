@@ -5,15 +5,12 @@ const TITLE_MAX = 100
 const LOG_MAX = 4_000
 
 export interface PullRequestFacts {
-  sessionId: string
   branch: string
   worktreePath: string
   mainWorkspace: string
-  container: string
   base?: string
   log: string
   stat: string
-  committed: boolean
   title?: string
   summary?: string[]
   briefTitle?: string
@@ -44,13 +41,6 @@ export function prBodyFor(facts: PullRequestFacts): string {
   const log = clip(facts.log, LOG_MAX)
   const commits = log === "" ? 0 : log.split("\n").length
   const lines = [
-    facts.title === undefined
-      ? `Work from the sandboxed conversation \`${facts.sessionId}\`.`
-      : `Work from the sandboxed conversation **${facts.title.trim()}** (\`${facts.sessionId}\`).`,
-    "",
-    `The conversation worked in its own git worktree (\`${facts.worktreePath}\`) on branch \`${facts.branch}\`,`,
-    `carved from ${facts.base === undefined ? "the main checkout's `HEAD`" : `commit \`${facts.base}\``}.`,
-    "",
     ...(facts.summary === undefined || facts.summary.length === 0
       ? []
       : ["## Summary", "", ...facts.summary.map((line) => `- ${line}`), ""]),
@@ -61,10 +51,6 @@ export function prBodyFor(facts: PullRequestFacts): string {
     "```",
     "",
   ]
-  if (facts.committed) {
-    lines.push("The merge button committed the worktree's remaining changes before pushing.", "")
-  }
-  lines.push(`Opened by the \`dsh-docker-sandbox\` plugin from container \`${facts.container}\`.`)
   const body = lines.join("\n")
   return body.length <= MAX_BODY_CHARS ? body : `${body.slice(0, MAX_BODY_CHARS).trimEnd()}\n… (truncated)`
 }
