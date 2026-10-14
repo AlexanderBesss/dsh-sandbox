@@ -2,6 +2,7 @@ import { createElement } from "react"
 import { ContainerChip } from "./chip.tsx"
 import { SandboxConfigForm, type RowConfigForm } from "./config-form.tsx"
 import { MergeRequestButton } from "./merge-button.tsx"
+import { PullRequestLink } from "./pr-link.tsx"
 import { ReviewButton } from "./review-button.tsx"
 import { ResolveConflictsButton } from "./resolve-button.tsx"
 import { SubagentStopButton } from "./subagent-stop-button.tsx"
@@ -43,8 +44,16 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
     name: "conversation.session.header.utilities",
-    id: "dsh-docker-sandbox:resolve",
+    id: "dsh-docker-sandbox:pr-link",
     order: 22,
+    label: "Pull request link",
+    registrant: "dsh-docker-sandbox",
+  }, (props) => createElement(PullRequestLink, { sessionId: props.sessionId })))
+
+  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
+    name: "conversation.session.header.utilities",
+    id: "dsh-docker-sandbox:resolve",
+    order: 23,
     label: "Resolve conflicts",
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(ResolveConflictsButton, { sessionId: props.sessionId })))
@@ -52,7 +61,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
     name: "conversation.session.header.utilities",
     id: "dsh-docker-sandbox:review",
-    order: 23,
+    order: 24,
     label: "Review changes",
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(ReviewButton, { sessionId: props.sessionId })))
@@ -60,7 +69,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
     name: "conversation.session.header.utilities",
     id: "dsh-docker-sandbox:subagent-stop",
-    order: 24,
+    order: 25,
     label: "Stop subagent",
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(SubagentStopButton, { sessionId: props.sessionId })))

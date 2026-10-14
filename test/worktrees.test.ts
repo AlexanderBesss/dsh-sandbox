@@ -39,7 +39,7 @@ interface FakeCli {
   calls: string[][]
 }
 
-function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): FakeCli {
+function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string, ghPrExists?: string): FakeCli {
   const calls: string[][] = []
   const ok = (stdout = ''): CliResult => ({ stdout, stderr: '', code: 0 })
   let mergingNow = options.merging === true
@@ -132,6 +132,9 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
     },
     run: async (args) => {
       calls.push(['gh', ...args])
+      if (ghPrExists !== undefined && args[0] === 'pr' && args[1] === 'create') {
+        throw new CliCommandError('gh pr create failed', 'GH_FAILED', ghPrExists)
+      }
       if (ghFails !== undefined) throw new CliCommandError('gh pr create failed', 'GH_FAILED', ghFails)
       return ok(`${ghUrl ?? 'https://github.com/o/r/pull/7'}\n`)
     },
@@ -460,6 +463,34 @@ describe('WorktreeManager.mergeRequest', () => {
     expect(result.prUrl).toBeUndefined()
     expect(result.prError).toMatch(/not logged to github\.com/)
     expect(result.compareUrl).toBe('https://github.com/o/r/compare/dsh-sbx/session-3?expand=1')
+  })
+
+  it('reads back the link when the pull request already exists', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli(
+      { repoRoot, dirty: ' M a\n', remote: 'https://github.com/o/r.git' },
+      'https://github.com/o/r/pull/9',
+      undefined,
+      'a pull request for branch "dsh-sbx/session-3" already exists',
+    )
+    const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(result.pushed).toBe(true)
+    expect(result.prUrl).toBe('https://github.com/o/r/pull/9')
+    expect(result.prError).toBeUndefined()
+    expect(calls).toContainEqual(['gh', 'pr', 'view', '--json', 'url', '-q', '.url'])
+  })
+
+  it('remembers the pull request link across a restart', async () => {
+    const repoRoot = tempRoot()
+    const first = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'https://github.com/o/r.git' })
+    const manager = new WorktreeManager({ git: first.git, gh: first.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    await manager.mergeRequest('session-3', repoRoot)
+
+    const second = fakeCli({ repoRoot, branchExists: true })
+    const reopened = new WorktreeManager({ git: second.git, gh: second.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    const info = await reopened.info('session-3', repoRoot)
+    expect(info?.prUrl).toBe('https://github.com/o/r/pull/7')
   })
 
   it('stops at a commit when the checkout has no remote', async () => {

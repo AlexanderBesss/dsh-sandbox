@@ -25,6 +25,7 @@ export interface WorktreeEntry {
   lockHash?: string
   notifiedBehind?: string
   notifiedMerging?: boolean
+  prUrl?: string
 }
 
 export interface WorktreeInfo {
@@ -36,6 +37,7 @@ export interface WorktreeInfo {
   merging: boolean
   conflicts?: string[]
   behind?: number
+  prUrl?: string
 }
 
 export interface ConflictBundle {
@@ -185,6 +187,7 @@ export class WorktreeManager {
       merging,
       ...(merging ? { conflicts } : {}),
       ...(behind === undefined ? {} : { behind }),
+      ...(entry.prUrl === undefined ? {} : { prUrl: entry.prUrl }),
     }
   }
 
@@ -492,6 +495,10 @@ export class WorktreeManager {
             ...(brief.title === undefined ? {} : { briefTitle: brief.title }),
           }),
     })
+    if (pr.prUrl !== undefined && entry.prUrl !== pr.prUrl) {
+      entry.prUrl = pr.prUrl
+      this.saveRegistry(entry.repoRoot)
+    }
 
     return {
       branch: entry.branch,
@@ -545,10 +552,28 @@ export class WorktreeManager {
       const prUrl = /https?:\/\/\S+/.exec(opened.stdout)?.[0]
       return prUrl === undefined ? {} : { prUrl }
     } catch (error) {
+      // A second click after the request exists fails `pr create`; the link is
+      // still what the button should show, so read it back from the remote.
+      const existing = await this.existingPullRequestUrl(entry)
+      if (existing !== undefined) return { prUrl: existing }
       return {
         prError: error instanceof CliCommandError ? error.detail ?? error.message : String(error),
         compareUrl: compareUrlFor(remote, entry.branch),
       }
+    }
+  }
+
+  private async existingPullRequestUrl(entry: WorktreeEntry): Promise<string | undefined> {
+    const gh = this.deps.gh
+    if (gh === undefined) return undefined
+    try {
+      const view = await gh.run(["pr", "view", "--json", "url", "-q", ".url"], {
+        cwd: entry.worktreePath,
+        timeoutMs: QUICK_MS,
+      })
+      return /https?:\/\/\S+/.exec(view.stdout)?.[0]
+    } catch {
+      return undefined
     }
   }
 
