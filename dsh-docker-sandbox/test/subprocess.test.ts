@@ -164,4 +164,48 @@ describe('DockerSubprocessRuntime.waitForExit', () => {
     exit.resolve({ code: null, signal: 'SIGKILL' })
     expect(await waiting).toBe(false)
   })
+
+  it('reports a wait aborted mid-flight as unsettled', async () => {
+    const exit = Promise.withResolvers<{ code: number | null; signal: string | null }>()
+    const transport = {
+      spawnInContainer: () => ({
+        child: { pid: 1, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => undefined },
+        done: exit.promise,
+        kill: () => undefined,
+      }),
+      execInContainer: () => Promise.resolve(okResult('NOPID\n')),
+    } as unknown as DockerTransport
+    const runtime = makeRuntime(transport)
+    const handle = runtime.spawn({ argv: ['sh', '-c', 'sleep 1'] })
+    const ac = new AbortController()
+    const waiting = handle.waitForExit(ac.signal)
+    ac.abort()
+    expect(await waiting).toBe(false)
+    exit.resolve({ code: 0, signal: null })
+  })
+
+  it('waits for the process even when the signal was aborted before the wait', async () => {
+    const exit = Promise.withResolvers<{ code: number | null; signal: string | null }>()
+    const transport = {
+      spawnInContainer: () => ({
+        child: { pid: 1, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => undefined },
+        done: exit.promise,
+        kill: () => undefined,
+      }),
+      execInContainer: () => Promise.resolve(okResult('NOPID\n')),
+    } as unknown as DockerTransport
+    const runtime = makeRuntime(transport)
+    const handle = runtime.spawn({ argv: ['sh', '-c', 'sleep 1'] })
+    const ac = new AbortController()
+    ac.abort()
+    const waiting = handle.waitForExit(ac.signal)
+    let settled = false
+    void waiting.then(() => {
+      settled = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(settled, 'an already-aborted signal must not shortcut the settle check').toBe(false)
+    exit.resolve({ code: 0, signal: null })
+    expect(await waiting).toBe(true)
+  })
 })

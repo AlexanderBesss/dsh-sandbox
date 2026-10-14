@@ -104,18 +104,103 @@ export interface StatusDeps {
   subagents?: () => SubagentService | undefined
 }
 
+type Respond = (status: number, body: unknown) => void
+
+export async function handleMergeRequest(
+  respond: Respond,
+  deps: StatusDeps,
+  sessionId: string,
+  workspace: string,
+  isPost: boolean,
+): Promise<void> {
+  if (!isPost) {
+    respond(405, { ok: false, error: { code: "method-error", message: "merge-request requires POST" } })
+    return
+  }
+  if (deps.worktrees === undefined) {
+    respond(409, {
+      ok: false,
+      error: { code: "worktree-off", message: "worktree mode is disabled, so this session has no branch to merge" },
+    })
+    return
+  }
+  const result = await deps.worktrees.mergeRequest(sessionId, workspace)
+  respond(200, { ok: true, data: result })
+}
+
+export async function handleReview(
+  respond: Respond,
+  ctx: SandboxContext,
+  deps: StatusDeps,
+  sessionId: string,
+  workspace: string,
+  isPost: boolean,
+): Promise<void> {
+  if (!isPost) {
+    respond(405, { ok: false, error: { code: "method-error", message: "review requires POST" } })
+    return
+  }
+  const bundle = deps.worktrees === undefined
+    ? undefined
+    : await deps.worktrees.reviewFor(sessionId, workspace)
+  if (bundle === undefined) {
+    respond(409, {
+      ok: false,
+      error: { code: "no-worktree", message: "this session has no git worktree to review yet (worktree mode is off, or no tool call has created one)" },
+    })
+    return
+  }
+  if (changesAreEmpty(bundle.changes)) {
+    respond(409, {
+      ok: false,
+      error: { code: "no-changes", message: "this session has made no changes to review" },
+    })
+    return
+  }
+  const subagents = deps.subagents?.()
+  const provider = subagents?.list()[0]
+  if (subagents === undefined || provider === undefined) {
+    respond(503, {
+      ok: false,
+      error: {
+        code: "no-subagents",
+        message: subagents === undefined ? "the subagent service is not available" : "no subagent provider is registered",
+      },
+    })
+    return
+  }
+  const parent = ctx.agents?.get?.(sessionId)
+  if (parent === undefined) {
+    respond(409, {
+      ok: false,
+      error: { code: "no-agent", message: "this session has no live agent to delegate from" },
+    })
+    return
+  }
+  const run = await subagents.start(provider, {
+    prompt: [{ type: "text", text: buildReviewPrompt(bundle.entry, bundle.changes) }],
+    parent,
+    signal: new AbortController().signal,
+    label: "code review",
+  })
+  const childSessionId = run.localAgent?.session?.id ?? ""
+  void settleReviewRun(ctx, run, sessionId, childSessionId)
+  respond(200, { ok: true, data: { provider, childSessionId } })
+}
+
 export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void {
   ctx.effect(() => ctx.webServer.register({
     kind: "prefix",
     path: "/sandbox/api",
     handler: async (request: IncomingMessage, response: ServerResponse) => {
       const isPost = request.method === "POST"
+      const respond: Respond = (status, body) => writeJson(request, response, status, body)
       if (!sameOrigin(request)) {
-        writeJson(request, response, 403, { ok: false, error: { code: "forbidden", message: "same-origin requests only" } })
+        respond(403, { ok: false, error: { code: "forbidden", message: "same-origin requests only" } })
         return
       }
       if (request.method !== "GET" && request.method !== "HEAD" && !isPost) {
-        writeJson(request, response, 405, { ok: false, error: { code: "method-error", message: "method not allowed" } })
+        respond(405, { ok: false, error: { code: "method-error", message: "method not allowed" } })
         return
       }
       const url = new URL(request.url ?? "/", "http://dsh.internal")
@@ -123,16 +208,25 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
 
       try {
         if (action === "list") {
-          writeJson(request, response, 200, { ok: true, data: await deps.provisioner.listOwned() })
+          respond(200, { ok: true, data: await deps.provisioner.listOwned() })
           return
         }
         const sessionId = url.searchParams.get("session") ?? ""
         if (sessionId === "") {
-          writeJson(request, response, 400, { ok: false, error: { code: "bad-request", message: "a session id is required" } })
+          respond(400, { ok: false, error: { code: "bad-request", message: "a session id is required" } })
           return
         }
         const headerCwd = ctx.sessions?.get?.(sessionId)?.header?.cwd
         const workspace = typeof headerCwd === "string" && headerCwd !== "" ? headerCwd : deps.config.workspaceRoot
+
+        if (action === "merge-request") {
+          await handleMergeRequest(respond, deps, sessionId, workspace, isPost)
+          return
+        }
+        if (action === "review") {
+          await handleReview(respond, ctx, deps, sessionId, workspace, isPost)
+          return
+        }
         const target: SandboxTarget = {
           sessionId,
           container: containerNameFor(sessionId),
@@ -140,85 +234,9 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
           shared: false,
         }
         const status: SandboxStatus = await deps.provisioner.status(target)
-        if (action === "merge-request") {
-          if (!isPost) {
-            writeJson(request, response, 405, { ok: false, error: { code: "method-error", message: "merge-request requires POST" } })
-            return
-          }
-          if (deps.worktrees === undefined) {
-            writeJson(request, response, 409, {
-              ok: false,
-              error: { code: "worktree-off", message: "worktree mode is disabled, so this session has no branch to merge" },
-            })
-            return
-          }
-          const result = await deps.worktrees.mergeRequest(sessionId, workspace)
-          writeJson(request, response, 200, { ok: true, data: result })
-          return
-        }
-        if (action === "review") {
-          if (!isPost) {
-            writeJson(request, response, 405, { ok: false, error: { code: "method-error", message: "review requires POST" } })
-            return
-          }
-          const bundle = deps.worktrees === undefined
-            ? undefined
-            : await deps.worktrees.reviewFor(sessionId, workspace)
-          if (bundle === undefined) {
-            writeJson(request, response, 409, {
-              ok: false,
-              error: { code: "no-worktree", message: "this session has no git worktree to review yet (worktree mode is off, or no tool call has created one)" },
-            })
-            return
-          }
-          if (changesAreEmpty(bundle.changes)) {
-            writeJson(request, response, 409, {
-              ok: false,
-              error: { code: "no-changes", message: "this session has made no changes to review" },
-            })
-            return
-          }
-          const subagents = deps.subagents?.()
-          if (subagents === undefined) {
-            writeJson(request, response, 503, {
-              ok: false,
-              error: { code: "no-subagents", message: "the subagent service is not available" },
-            })
-            return
-          }
-          const provider = subagents.list()[0]
-          if (provider === undefined) {
-            writeJson(request, response, 503, {
-              ok: false,
-              error: { code: "no-subagents", message: "no subagent provider is registered" },
-            })
-            return
-          }
-          const parent = ctx.agents?.get?.(sessionId)
-          if (parent === undefined) {
-            writeJson(request, response, 409, {
-              ok: false,
-              error: { code: "no-agent", message: "this session has no live agent to delegate from" },
-            })
-            return
-          }
-          const run = await subagents.start(provider, {
-            prompt: [{ type: "text", text: buildReviewPrompt(bundle.entry, bundle.changes) }],
-            parent,
-            signal: new AbortController().signal,
-            label: "code review",
-          })
-          const childSessionId = run.localAgent?.session?.id ?? ""
-          void settleReviewRun(ctx, run, sessionId, childSessionId)
-          writeJson(request, response, 200, {
-            ok: true,
-            data: { provider, childSessionId },
-          })
-          return
-        }
         const worktree = await deps.worktrees?.info(sessionId, workspace)
         const worktreeError = deps.worktrees?.failureFor(sessionId)
-        writeJson(request, response, 200, {
+        respond(200, {
           ok: true,
           data: {
             ...status,
@@ -228,7 +246,7 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
         })
       } catch (error) {
         const code = error instanceof SandboxUnavailableError ? error.code : "unknown"
-        writeJson(request, response, 500, { ok: false, error: { code, message: (error as Error).message } })
+        respond(500, { ok: false, error: { code, message: (error as Error).message } })
       }
     },
   }), "dsh-docker-sandbox: status route")

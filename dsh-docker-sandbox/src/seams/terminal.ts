@@ -3,6 +3,7 @@ import type { SandboxContext } from "../context.ts"
 import { TerminalError, type TerminalBackend, type TerminalBackendSession, type TerminalSendOperation, type TerminalWaitReason } from "@deepseek-ai/dsh-terminal"
 import type { SandboxConfig } from "../config.ts"
 import { PathMapper } from "../container/paths.ts"
+import { opIdFactory } from "../utils/op-id.ts"
 import { Provisioner } from "../container/provisioner.ts"
 import { resolveTarget, targetForSession, type SandboxTarget } from "../container/session.ts"
 import { signalProcessGroup, type ProcessGroupSignal } from "../container/process-group.ts"
@@ -11,9 +12,7 @@ import type { WorktreeManager } from "../container/worktrees.ts"
 
 const TRANSCRIPT_CAP = 200_000
 
-let terminalOpSeq = 0
-
-const OP_NONCE = Math.random().toString(36).slice(2, 8)
+const nextTerminalOp = opIdFactory("dsh-t")
 
 const MARKER_PATTERN = /^__DSH_DONE_(\d+)__ (\d+|null)$/
 
@@ -34,7 +33,7 @@ class ContainerTerminalSession implements TerminalBackendSession {
   private pending: PendingSend | undefined
   private sendSeq = 0
   private closed = false
-  private readonly runnerOp = `dsh-t${OP_NONCE}${++terminalOpSeq}`
+  private readonly runnerOp = nextTerminalOp()
   private releaseWork: (() => void) | undefined
 
   constructor(
