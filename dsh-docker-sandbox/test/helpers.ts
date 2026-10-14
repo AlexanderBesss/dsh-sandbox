@@ -96,6 +96,8 @@ export interface FakeEngine {
   probe?: string
   /** Fail `docker run`. */
   runFails?: boolean
+  /** The daemon answers nothing: `docker version` fails like an engine that is off. */
+  engineDown?: boolean
   /** The container already holding this name is not one this plugin owns. */
   foreign?: boolean
 }
@@ -129,6 +131,10 @@ export function fakeTransport(engine: FakeEngine = {}): { transport: DockerTrans
   const transport = {
     async docker(args: string[], opts: { stdin?: Buffer | string } = {}) {
       calls.push({ kind: 'docker', args, ...(opts.stdin === undefined ? {} : { stdin: opts.stdin }) })
+      if (args[0] === 'version') {
+        if (engine.engineDown === true) fail('Cannot connect to the Docker daemon at npipe:////./pipe/docker_engine. Is the docker daemon running?')
+        return { ...ok, stdout: Buffer.from('27.3.1\n') }
+      }
       if (args[0] === 'run') {
         if (engine.runFails === true) fail('Error response from daemon: Cannot connect to the Docker daemon at npipe')
         state = 'running'

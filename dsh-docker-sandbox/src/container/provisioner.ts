@@ -109,6 +109,8 @@ export class Provisioner {
   private readonly inflight = new Map<string, Promise<SandboxTarget>>()
   /** Last provisioning error, surfaced to the UI. */
   private readonly errors = new Map<string, string>()
+  /** Cached answer to the engine-wide reachability probe (see `engineReachable`). */
+  private engineProbe: { at: number; reachable: boolean; error?: string } | undefined
   /** Conversations with work still running; their containers are never idle. */
   private readonly activeWork = new Map<string, number>()
 
@@ -359,6 +361,26 @@ export class Provisioner {
   /** Current container state, or undefined when the container does not exist. */
   async stateOf(target: SandboxTarget): Promise<string | undefined> {
     return (await this.inspectState(target)).state
+  }
+
+  /**
+   * Whether the Docker engine answers at all.
+   *
+   * Provisioning failures are per-conversation; this is the engine-wide
+   * question the turn gate asks before letting a worktree-mode chat run. One
+   * `docker version` answers it, cached for `maxAgeMs` so a busy chat does
+   * not spawn a probe per step.
+   */
+  async engineReachable(maxAgeMs = 10000): Promise<{ reachable: boolean; error?: string }> {
+    const now = Date.now()
+    if (this.engineProbe !== undefined && now - this.engineProbe.at < maxAgeMs) return this.engineProbe
+    try {
+      await this.transport.docker(["version", "--format", "{{.Server.Version}}"], { timeoutMs: 15000 })
+      this.engineProbe = { at: now, reachable: true }
+    } catch (error) {
+      this.engineProbe = { at: now, reachable: false, error: failureDetail(error) }
+    }
+    return this.engineProbe
   }
 
   /**

@@ -68,7 +68,11 @@ all see the container's view of the workspace too.
   app still holds open.
 - **It fails closed.** If the Docker daemon is unreachable, tool calls fail
   with a named error (`DOCKER_MISSING`, `DOCKER_UNREACHABLE`, `EXEC_TIMEOUT`).
-  Nothing falls back to running on the host.
+  Nothing falls back to running on the host. With worktree mode on the whole
+  turn fails closed: the engine is probed before each step, and an
+  unreachable one ends the turn with a "start the Docker engine" error in the
+  conversation instead of the chat quietly answering against the host
+  checkout.
 
 ## Install
 
@@ -224,6 +228,11 @@ between host and container, and ripgrep availability. It is skipped unless
 - **`the Docker daemon is not reachable …`** — the engine is starting or
   paused. Wait for Docker Desktop to finish booting; the plugin does not retry
   on the host.
+- **`this conversation runs in a Docker sandbox, but the Docker engine is not
+  reachable`** (worktree mode) — the turn gate refused to run the chat: with
+  the engine off, worktree mode would edit the main checkout while claiming
+  the sandbox's isolation, so the message is refused rather than answered.
+  Start Docker Desktop and send it again.
 - **`the sandbox container "…" could not be created …`** — usually a bad image
   name or a drive Docker Desktop is not sharing. Check the message detail, and
   Settings → Resources → File Sharing for the workspace's drive.
