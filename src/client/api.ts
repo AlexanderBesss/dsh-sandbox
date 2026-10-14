@@ -5,6 +5,7 @@ export interface WorktreeView {
   dirty: boolean
   unpushed: boolean
   merging: boolean
+  conflicts?: string[]
   behind?: number
 }
 
@@ -39,6 +40,12 @@ export interface MergeRequestView {
 export interface ReviewView {
   provider: string
   childSessionId?: string
+}
+
+export interface ResolveView {
+  provider: string
+  childSessionId?: string
+  conflicts: number
 }
 
 export async function fetchSandboxStatus(sessionId: string): Promise<SandboxStatusView> {
@@ -78,6 +85,20 @@ export async function requestReview(sessionId: string): Promise<ReviewView> {
     | { ok: false; error?: { code?: string; message?: string } }
   if (body.ok !== true) {
     throw new Error(body.error?.message ?? `review request failed with HTTP ${response.status}`)
+  }
+  return body.data
+}
+
+export async function resolveConflicts(sessionId: string): Promise<ResolveView> {
+  const response = await fetch(`/sandbox/api/resolve-conflicts?session=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    headers: { accept: "application/json" },
+  })
+  const body = (await response.json()) as
+    | { ok: true; data: ResolveView }
+    | { ok: false; error?: { code?: string; message?: string } }
+  if (body.ok !== true) {
+    throw new Error(body.error?.message ?? `conflict resolution failed with HTTP ${response.status}`)
   }
   return body.data
 }

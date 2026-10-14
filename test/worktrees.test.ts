@@ -103,7 +103,7 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
     if (args[0] === 'symbolic-ref') return ok(options.mainBranch === undefined ? '' : `${options.mainBranch}\n`)
     if (args[0] === 'log') return ok(`${options.log ?? ''}\n`)
     if (args[0] === 'diff') {
-      if (args.includes('--diff-filter=U')) return ok(`${(options.conflicts ?? []).join('\n')}\n`)
+      if (args.includes('--diff-filter=U')) return ok((options.conflicts ?? []).join('\0'))
       return ok(`${options.stat ?? ''}\n`)
     }
     if (args[0] === 'for-each-ref') {
@@ -528,10 +528,30 @@ describe('WorktreeManager sync with main', () => {
     expect(outcome?.state).toBe('conflict')
     expect(outcome?.conflicts).toEqual(['src/a.ts', 'src/b.ts'])
     expect(fake.calls).toContainEqual(['merge', '--no-edit', 'origin/main'])
-    expect(fake.calls).toContainEqual(['diff', '--name-only', '--diff-filter=U'])
+    expect(fake.calls).toContainEqual(['diff', '-z', '--name-only', '--diff-filter=U'])
     expect(notices).toHaveLength(1)
     expect(notices[0]).toContain('src/a.ts')
     expect(notices[0]).toContain('git commit')
+    expect(notices[0]).toContain('resolve conflicts')
+  })
+
+  it('lists the conflicted files in the status only while mid-merge', async () => {
+    const mergingRoot = tempRoot()
+    const { manager: mergingManager } = syncManager(
+      { repoRoot: mergingRoot, mainBranch: 'main', originBranch: 'main', merging: true, conflicts: ['src/a.ts', 'src/b.ts'] },
+    )
+    mergingManager.ensure('session-3', mergingRoot)
+    expect(await mergingManager.info('session-3', mergingRoot)).toMatchObject({
+      merging: true,
+      conflicts: ['src/a.ts', 'src/b.ts'],
+    })
+
+    const cleanRoot = tempRoot()
+    const { manager: cleanManager } = syncManager({ repoRoot: cleanRoot, mainBranch: 'main', originBranch: 'main' })
+    cleanManager.ensure('session-3', cleanRoot)
+    const info = await cleanManager.info('session-3', cleanRoot)
+    expect(info?.merging).toBe(false)
+    expect(info).not.toHaveProperty('conflicts')
   })
 
   it('reports a merge that failed without conflicting, and tells no one about a conflict', async () => {

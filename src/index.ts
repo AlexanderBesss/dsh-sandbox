@@ -12,7 +12,7 @@ import { createPrBrief } from "./container/pr-brief.ts"
 import { createSessionTitleReader } from "./container/session-title.ts"
 import { type MountMode, PathMapper } from "./container/paths.ts"
 import { Provisioner } from "./container/provisioner.ts"
-import { registerStatusRoute } from "./status.ts"
+import { createResolverGuard, registerStatusRoute } from "./status.ts"
 import { DockerShellExecutor } from "./seams/shell.ts"
 import { DockerSubprocessRuntime } from "./seams/subprocess.ts"
 import { createShellBackend } from "./seams/terminal.ts"
@@ -95,7 +95,14 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     subagents = (inner as SandboxContext).subagents
   })
 
-  registerStatusRoute(ctx, { provisioner, paths, config, worktrees, subagents: () => subagents })
+  registerStatusRoute(ctx, {
+    provisioner,
+    paths,
+    config,
+    worktrees,
+    subagents: () => subagents,
+    resolvers: createResolverGuard(),
+  })
 
   ctx.on("workspace/session-stop", ({ sessionId }: { sessionId: string }) =>
     provisioner.releaseSession(sessionId),
