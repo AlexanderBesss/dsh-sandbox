@@ -4,6 +4,7 @@ import { SandboxConfigForm, type RowConfigForm } from "./config-form.tsx"
 import { MergeRequestButton } from "./merge-button.tsx"
 import { ReviewButton } from "./review-button.tsx"
 import { ResolveConflictsButton } from "./resolve-button.tsx"
+import { SubagentStopButton } from "./subagent-stop-button.tsx"
 
 interface SlotRegistration {
   name: string
@@ -55,6 +56,14 @@ export function apply(ctx: ClientContext): void {
     label: "Review changes",
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(ReviewButton, { sessionId: props.sessionId })))
+
+  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
+    name: "conversation.session.header.utilities",
+    id: "dsh-docker-sandbox:subagent-stop",
+    order: 24,
+    label: "Stop subagent",
+    registrant: "dsh-docker-sandbox",
+  }, (props) => createElement(SubagentStopButton, { sessionId: props.sessionId })))
 
   ctx.slots.inject("plugins.row.config", () => ctx.slots.register({
     name: "plugins.row.config",

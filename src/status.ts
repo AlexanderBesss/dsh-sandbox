@@ -182,6 +182,7 @@ export interface SubagentRunRegistry {
   running(sessionId: string): SubagentHandle[]
   cancel(sessionId: string, kind: SubagentKind): SubagentHandle[]
   cancelAll(sessionId: string): SubagentHandle[]
+  findByChild(childSessionId: string): { sessionId: string; handle: SubagentHandle } | undefined
 }
 
 export function createSubagentRunRegistry(now: () => number = Date.now): SubagentRunRegistry {
@@ -216,6 +217,16 @@ export function createSubagentRunRegistry(now: () => number = Date.now): Subagen
     ),
     cancel: (sessionId, kind) => abortMatching(sessionId, (handle) => handle.kind === kind),
     cancelAll: (sessionId) => abortMatching(sessionId, () => true),
+    findByChild: (childSessionId) => {
+      for (const [sessionId, held] of running) {
+        for (const handle of held) {
+          if (handle.childSessionId !== childSessionId) continue
+          if (handle.cancelledAt !== undefined && now() - handle.cancelledAt > CANCEL_REPORT_TTL_MS) continue
+          return { sessionId, handle }
+        }
+      }
+      return undefined
+    },
   }
 }
 
@@ -514,6 +525,7 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
         const worktree = await deps.worktrees?.info(sessionId, workspace)
         const worktreeError = deps.worktrees?.failureFor(sessionId)
         const subagents = subagentViews(deps.runs.running(sessionId))
+        const childOf = deps.runs.findByChild(sessionId)
         respond(200, {
           ok: true,
           data: {
@@ -521,6 +533,16 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
             ...(worktree === undefined ? {} : { worktree }),
             ...(worktreeError === undefined ? {} : { worktreeError }),
             ...(subagents.length === 0 ? {} : { subagents }),
+            ...(childOf === undefined
+              ? {}
+              : {
+                  subagentChild: {
+                    parentSessionId: childOf.sessionId,
+                    kind: childOf.handle.kind,
+                    startedAt: childOf.handle.startedAt,
+                    cancelling: childOf.handle.cancelling,
+                  },
+                }),
           },
         })
       } catch (error) {

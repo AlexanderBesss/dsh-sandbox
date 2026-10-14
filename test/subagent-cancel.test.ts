@@ -166,6 +166,19 @@ describe('createSubagentRunRegistry', () => {
     now = 20 * 60_000
     expect(runs.running(SESSION)).toHaveLength(1)
   })
+
+  it('finds which session started a child, and stops claiming one whose cancel report expired', () => {
+    let now = 0
+    const runs = createSubagentRunRegistry(() => now)
+    runs.track(SESSION, 'review', new AbortController(), 'child-1')
+    const found = runs.findByChild('child-1')
+    expect(found?.sessionId).toBe(SESSION)
+    expect(found?.handle.kind).toBe('review')
+    expect(runs.findByChild('child-unknown')).toBeUndefined()
+    runs.cancel(SESSION, 'review')
+    now = 61_000
+    expect(runs.findByChild('child-1')).toBeUndefined()
+  })
 })
 
 describe('handleCancelSubagent', () => {
@@ -312,5 +325,30 @@ describe('the cancel-subagent route', () => {
   it('answers 400 for a cancel-subagent call with no kind', async () => {
     const answer = await dispatch(`/sandbox/api/cancel-subagent?session=${SESSION}`, reviewDeps(cancellableSubagents([])), { get: () => ({ id: SESSION }) })
     expect(answer.status).toBe(400)
+  })
+
+  it('tells a child session which run it is, so its own header can offer to stop it', async () => {
+    const started: Started[] = []
+    const runs = createSubagentRunRegistry()
+    const deps = reviewDeps(cancellableSubagents(started), runs)
+    const agents = { get: () => ({ id: SESSION }) }
+    const withProvisioner = {
+      ...deps,
+      provisioner: { status: async () => ({ container: 'dsh-sbx-child-1', image: 'node:24', phase: 'running', ready: true, workspace: WORKSPACE, containerWorkspace: '/workspace', lastUsedAt: 0 }) },
+    } as unknown as StatusDeps
+
+    await dispatch(`/sandbox/api/review?session=${SESSION}`, deps, agents)
+    const answer = await dispatch(`/sandbox/api/status?session=child-1`, withProvisioner, agents)
+    expect((answer.body as { data: { subagentChild: unknown } }).data.subagentChild).toEqual({
+      parentSessionId: SESSION,
+      kind: 'review',
+      startedAt: expect.any(Number),
+      cancelling: false,
+    })
+
+    await dispatch(`/sandbox/api/cancel-subagent?session=${SESSION}&kind=review`, deps, agents)
+    await flush()
+    const after = await dispatch(`/sandbox/api/status?session=child-1`, withProvisioner, agents)
+    expect((after.body as { data: { subagentChild?: unknown } }).data.subagentChild).toBeUndefined()
   })
 })
