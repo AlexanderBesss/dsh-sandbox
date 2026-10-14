@@ -464,10 +464,6 @@ export class WorktreeManager {
 
     await this.deps.git.run(["add", "-A"], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
     const dirty = await this.isDirty(entry)
-    const stat = await this.tryGit(
-      staged.base === undefined ? ["diff", "--stat", "HEAD"] : ["diff", "--stat", staged.base],
-      entry.worktreePath,
-    )
     const committed = dirty
     if (dirty) await this.commitWorktree(entry, this.commitSubject(sessionId, title, brief?.title))
 
@@ -479,7 +475,6 @@ export class WorktreeManager {
       committed,
       branch: entry.branch,
       log,
-      ...(stat === undefined ? {} : { stat: stat.stdout.trim() }),
       ...(brief === undefined
         ? {}
         : {

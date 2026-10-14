@@ -57,7 +57,7 @@ describe('prBodyFor', () => {
     expect(body).toContain('commit `deadbeefcafe`')
     expect(body).toContain('## Commits (2)')
     expect(body).toContain('abc1234 fix the login crash')
-    expect(body).toContain('src/login.ts | 12')
+    expect(body).not.toContain('src/login.ts | 12')
     expect(body).toContain('dsh-sbx-session-3')
   })
 
@@ -77,13 +77,12 @@ describe('prBodyFor', () => {
   it('is explicit about having nothing to show', () => {
     const body = prBodyFor(facts({ log: '', stat: '', base: undefined, title: undefined }))
     expect(body).toContain('(none)')
-    expect(body).toContain('(no tracked changes)')
     expect(body).toContain("the main checkout's `HEAD`")
     expect(body).toContain('`session-3`')
   })
 
   it('stays inside the size a host accepts, and says when it cut', () => {
-    const body = prBodyFor(facts({ stat: 'x'.repeat(100_000), log: 'y'.repeat(100_000) }))
+    const body = prBodyFor(facts({ log: 'y'.repeat(100_000) }))
     expect(body.length).toBeLessThanOrEqual(MAX_BODY_CHARS)
     expect(body).toContain('(truncated)')
   })

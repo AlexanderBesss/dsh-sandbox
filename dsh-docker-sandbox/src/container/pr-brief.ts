@@ -175,7 +175,7 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined
 }
 
 export function createPrBrief(deps: PrBriefDeps): PrBrief {
-  const fallback = "the branch keeps its current name and the description lists commits and diffstat only"
+  const fallback = "the branch keeps its current name and the description lists its commits only"
   return async (sessionId, facts) => {
     const subagents = deps.subagents()
     if (subagents === undefined) return { error: `the subagent service is not available, so ${fallback}` }

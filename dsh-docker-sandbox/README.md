@@ -243,10 +243,6 @@ F:\Projects\app.worktrees\fix-the-login-crash-1a2b3c   (branch dsh-sbx/fix-the-l
   ## Commits (1)
 
       4f2c1d8 dsh-sbx: Refuse the turn when the engine is down
-
-  ## Files changed
-
-      src/container/worktrees.ts | 61 ++++++++++++++++++
   ```
 
   Bullets are the child's, clipped to eight, and a line that is really a diff
@@ -258,7 +254,7 @@ F:\Projects\app.worktrees\fix-the-login-crash-1a2b3c   (branch dsh-sbx/fix-the-l
   (or logged in) the button stops at the pushed branch and reports the remote's
   compare URL, along with why the request did not open. Set `prBrief: false` to
   skip the naming pass entirely — branches then keep their creation name and the
-  description is the two git sections.
+  description is the commits section alone.
 - **Review button.** Beside it, a *review* button spawns a fresh subagent
   that reviews the conversation's changes — its own commits plus uncommitted
   and untracked edits, collected as a diff against the branch's fork point.

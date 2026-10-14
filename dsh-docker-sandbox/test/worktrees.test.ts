@@ -301,7 +301,7 @@ describe('WorktreeManager.mergeRequest', () => {
     expect(body).toContain('**Fix the login crash**')
     expect(body).toContain('commit `deadbeefcafe`')
     expect(body).toContain('abc1234 fix the login crash')
-    expect(body).toContain('src/login.ts | 12')
+    expect(body).not.toContain('src/login.ts | 12')
     expect(body).toContain('committed the worktree')
   })
 

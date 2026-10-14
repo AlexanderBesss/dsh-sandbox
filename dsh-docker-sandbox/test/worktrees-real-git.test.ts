@@ -97,7 +97,8 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
     expect(body).toContain('## Summary\n\n- Worktree mode fails the turn')
     expect(body).toContain('## Commits (1)')
     expect(body).toContain('dsh-sbx: Refuse the turn when the engine is down')
-    expect(body).toContain('gate.ts | 1 +')
+    expect(body).not.toContain('Files changed')
+    expect(body).not.toContain('gate.ts | 1 +')
   })
 
   it('keeps the branch name a second click would otherwise re-propose', async () => {

@@ -3,7 +3,6 @@ export const MAX_BODY_CHARS = 20_000
 const TITLE_MAX = 100
 
 const LOG_MAX = 4_000
-const STAT_MAX = 6_000
 
 export interface PullRequestFacts {
   sessionId: string
@@ -43,7 +42,6 @@ export function prTitleFor(facts: Pick<PullRequestFacts, "title" | "branch" | "b
 
 export function prBodyFor(facts: PullRequestFacts): string {
   const log = clip(facts.log, LOG_MAX)
-  const stat = clip(facts.stat, STAT_MAX)
   const commits = log === "" ? 0 : log.split("\n").length
   const lines = [
     facts.title === undefined
@@ -60,12 +58,6 @@ export function prBodyFor(facts: PullRequestFacts): string {
     "",
     "```",
     log === "" ? "(none)" : log,
-    "```",
-    "",
-    "## Files changed",
-    "",
-    "```",
-    stat === "" ? "(no tracked changes)" : stat,
     "```",
     "",
   ]
