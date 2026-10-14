@@ -1,83 +1,25 @@
-# dsh-docker-sandbox bundle patch.
-#
-# What it does:
-#   1. mounts dsh-docker-sandbox, which registers container-backed replacements
-#      for the execution world, routed to one dedicated Docker container per
-#      conversation, plus a tiny `docker-sandbox-host-restore` watchdog
-#   2. withdraws the host providers that own that world (`ctx.shell`,
-#      `ctx.subprocess`, `ctx.fs`)
-#
-# Everything downstream follows automatically: the `pwsh` tool reaches the
-# container through `ctx.shell`, `read` / `write` / `edit` through `ctx.fs`,
-# `glob` / `grep` through `ctx.subprocess` (they spawn the packaged ripgrep
-# through it), and the sidebar terminal through the `shell` backend.
-#
-# `sandbox` / `sandbox-policy` stay mounted but are not consulted: the container
-# boundary replaces same-world confinement, and the executor reports no
-# `sandboxMode`, so the shell tools stop advertising sandbox escalation.
-#
-# Disabling the plugin (plugin manager, or a `- id: docker-sandbox` /
-# `disabled: true` row in the profile patch) then stays safe: the watchdog
-# mounts after the withdrawn rows, sees `docker-sandbox` disabled, and restores
-# the host providers on the next boot. A `!!js` guard on the rows themselves
-# cannot work — the loader evaluates `disabled` at entry-creation time, in
-# list order, and bundle inserts append after the base rows.
-#
-# Revert: delete the three `disabled: true` rows and the watchdog row.
 
-# --- 1. mount the Docker container providers ----------------------------------
 - insert:
     - id: docker-sandbox
       name: dsh-docker-sandbox
       config:
-        # The docker CLI. Native Windows binary (Docker Desktop); set to a
-        # full path if the service PATH does not carry it.
-        # dockerArgv: ["docker"]
 
-        # Image for the per-chat sandbox container. Any image with POSIX `sh`
-        # plus coreutils/busybox works (`base64`, `stat`, `ls`, `mv`).
-        # `node:22` (Debian) carries Node.js + npm plus git, curl, python3,
-        # make/gcc for real dev work; `node:22-alpine` lacks git, and
-        # `alpine:3.20` is the minimal image.
         image: node:22
 
-        # Keep the container alive between commands.
-        # command: ["sleep", "infinity"]
-
-        # Mount only the session workspace (at /workspace). `drives` mounts each
-        # Windows drive root at /<letter> instead, so path mapping is lossless.
-        # mountMode: workspace
-        # containerWorkspace: /workspace
-
-        # Bootstrap `rg` into the container so glob/grep work.
-        # bootstrapTools: true
-
-        # Hard cap on container resources. `memory` is the RAM ceiling;
-        # `memorySwap` equal to it disables swap spillover, so a process
-        # over the cap is OOM-killed instead of paging. `cpu` optional.
         resourceLimits:
           cpu: "2"
           memory: 4g
           memorySwap: 4g
 
-        # Fail hung foreground commands after 1 minute instead of 2; the
-        # model can still request up to `maxTimeoutMs` or run in background.
         timeoutMs: 60000
 
-        # Reclaim idle sandbox containers after 1 hour (frees their RAM cap).
         idleTtlMs: 3600000
 
-        # Closing the app removes every sandbox container it owns. A crash
-        # skips this; the idle TTL reclaims those containers on next boot.
         gcOnUnload: true
-
-        # Idle containers older than this are deleted by the GC loop.
-        # idleTtlMs: 7200000
 
     - id: docker-sandbox-host-restore
       name: dsh-docker-sandbox/host-restore
 
-# --- 2. withdraw the host providers ------------------------------------------
 - id: pwsh-sandbox
   disabled: true
 
@@ -87,22 +29,9 @@
 - id: fs-sandbox
   disabled: true
 
-# --- 3. swap the model-facing shell tool to its POSIX twin -------------------
-#
-# The base bundle picks the shell tool by HOST platform: `tool-pwsh` on
-# Windows, `tool-bash` elsewhere. Under this plugin the shell that actually
-# runs is the container's `/bin/sh -lc`, so the PowerShell tool teaches the
-# model `Get-ChildItem` / `$env:` syntax that can only fail inside the Linux
-# sandbox. `dsh-tool-bash` is the call-for-call twin (same `ctx.shell` and
-# jobs contract) with a POSIX description, so flip the pair.
 - id: tool-pwsh
   disabled: true
 
 - id: tool-bash
   disabled: false
 
-# NOTE: no `terminal-bash` row here. That entry lives inside the
-# `persistent-shell` group (and is already platform-disabled on Windows), so a
-# top-level disable fails with `entry "terminal-bash" not found`. The plugin
-# registers its `shell` terminal backend only when the (group-isolated)
-# `terminals` service is visible to it.

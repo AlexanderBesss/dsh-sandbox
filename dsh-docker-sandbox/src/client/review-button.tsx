@@ -1,26 +1,9 @@
-/**
- * The session-header review button.
- *
- * Spawns a fresh subagent that reviews the code changes this conversation
- * made in its worktree. The reviewer starts with a clean slate: it carries no
- * reasoning from the main agent — its only inputs are the diff the plugin
- * collected from the worktree and the tools it runs itself in the sandbox.
- *
- * Like the merge button, it renders only when the status route reports a
- * worktree for the chat. Once the review starts, the child session appears in
- * the app's subagent UI; this button reports the child's id in its tooltip.
- *
- * @module dsh-docker-sandbox/client/review-button
- */
-
 import { useCallback, useEffect, useState } from "react"
 import { fetchSandboxStatus, requestReview, type ReviewView, type WorktreeView } from "./api.ts"
 
-/** How often the button re-reads the worktree state while mounted. */
 const POLL_MS = 15000
 
 export interface ReviewButtonProps {
-  /** The conversation this header belongs to (a standard slot prop). */
   sessionId: string
 }
 
@@ -40,7 +23,6 @@ export function ReviewButton({ sessionId }: ReviewButtonProps) {
         if (!alive) return
         setWorktree(next.worktree)
       } catch {
-        // The chip already reports a broken sandbox; this button just stays hidden.
       }
     }
     void load()
@@ -67,8 +49,6 @@ export function ReviewButton({ sessionId }: ReviewButtonProps) {
     )
   }, [phase, sessionId])
 
-  // No worktree (mode off, non-git workspace, or none created yet): nothing
-  // isolated to review, so the header shows no button.
   if (worktree === undefined) return null
 
   const label = phase === "busy"

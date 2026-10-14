@@ -1,15 +1,7 @@
 import { defineConfig } from 'tsdown'
 
-/** The Loader entry name the DSH client module system registers this bundle under. */
 const CLIENT_ID = 'dsh-docker-sandbox'
 
-/**
- * The DSH client module system consumes a lazy-CJS bundle: the file registers a
- * factory through `window.__ModuleLoader__.load`, and the factory receives the
- * platform `require` for its externals. `tsdown` emits the CJS body; the banner
- * and footer supply the registration wrapper, matching the shape the shipped
- * client plugins ship (`var module = { exports: {} } … return module.exports`).
- */
 const banner = [
   `window.__ModuleLoader__.load({`,
   `\tid: ${JSON.stringify(CLIENT_ID)},`,
@@ -29,9 +21,6 @@ export default defineConfig({
   minify: false,
   dts: false,
   clean: false,
-  // The package is `"type": "module"`, so tsdown would emit `.cjs`; the client
-  // loader is handed the exports target as a script, so keep the `.js` name the
-  // shipped client plugins use.
   outExtensions: () => ({ js: '.js' }),
   deps: {
     neverBundle: [

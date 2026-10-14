@@ -1,22 +1,5 @@
-/**
- * The Plugins page configuration form for the `docker-sandbox` row.
- *
- * The page hands the registered component a `form` face: `state` is the
- * host-synced snapshot of the row's volatile Config fields (the host derives
- * it from the exported `Config` schema), and `mutate(ops)` writes path-
- * addressed edits back through `remote.settings`, which persists them to the
- * profile patch and hot-commits them into the running plugin.
- *
- * The field list mirrors the `volatile()` leaves of `src/config.ts`; ordinary
- * (restart-required) fields are deliberately absent because the host would
- * reject writes to them.
- *
- * @module dsh-docker-sandbox/client/config-form
- */
-
 import { createElement, useState } from "react"
 
-/** One host-synced form snapshot for the row's namespace. */
 interface FormState {
   status: "loading" | "ready" | "unavailable"
   value?: Record<string, unknown>
@@ -24,13 +7,11 @@ interface FormState {
   revision?: number
 }
 
-/** The face the Plugins page passes to a row's configuration slot. */
 export interface RowConfigForm {
   state?: FormState
   mutate: (ops: unknown[], expectedRevision?: number) => Promise<boolean>
 }
 
-/** One editable volatile leaf of the sandbox Config schema. */
 interface FieldSpec {
   path: string[]
   label: string
@@ -61,7 +42,6 @@ function readPath(value: Record<string, unknown>, path: string[]): unknown {
   return cursor
 }
 
-/** One labeled input that commits on blur or Enter (a checkbox commits at once). */
 function FieldRow({ spec, current, writable, onCommit }: {
   spec: FieldSpec
   current: unknown
@@ -116,7 +96,6 @@ function FieldRow({ spec, current, writable, onCommit }: {
   )
 }
 
-/** The row's configuration page body. */
 export function SandboxConfigForm({ form }: { form: RowConfigForm }) {
   const state = form.state
   if (state === undefined || state.status === "loading") {

@@ -29,7 +29,6 @@ export async function probeBootstrap(transport: DockerTransport, target: Sandbox
   return { agentsMissing: facts.includes("AGENTS=no"), rgMissing: facts.includes("RG=no") }
 }
 
-// mirrors the ripgrepSource config union
 export type RipgrepSource = "package" | "url" | "none"
 
 export function ripgrepInstallCommand(source: RipgrepSource): string {
@@ -56,14 +55,11 @@ export async function installRipgrep(
     logger?.warn?.(
       `ripgrep bootstrap failed in ${target.container} (exit ${result.code}): ${result.stderr.toString("utf8").trim().slice(0, 300)}`,
     )
-    // search degrades to a clear tool error; shell and files still work
   }
 }
 
-// the script travels through stdin: a multi-line script in an argv element is what Windows argument quoting corrupts
 export async function uploadRunnerScript(transport: DockerTransport, target: SandboxTarget): Promise<void> {
   const content = await readFile(new URL("../../agent/run.sh", import.meta.url))
-  // a CRLF checkout would leave a `\r` on every line, which POSIX sh reads as a missing command
   const script = content.toString("utf8").replace(/\r\n/g, "\n")
   await transport.execInContainer(
     target,

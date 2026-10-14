@@ -1,5 +1,3 @@
-// re-enables host providers the bundle patch withdraws when docker-sandbox is off; the loader cannot guard them itself
-// shim: shipped registerAgentResolver throws on re-registration (0.2.0-rc.2); delete once upstream makes it idempotent
 
 import type { Context } from "@deepseek-ai/cordis"
 
@@ -41,7 +39,6 @@ export const name = "docker-sandbox-host-restore"
 export const inject = ["loader"]
 
 export function apply(ctx: Context & { loader: { entries(): Iterable<LoaderEntry> } }): void {
-  // cover the file-upload service however it arrives: mounted now, or (re-)provided later
   shimFileUploads(ctx.get("fileUploads"))
   ctx.on("internal/service", (service: unknown, impl: unknown) => {
     if (service === "fileUploads") shimFileUploads(impl)
@@ -57,7 +54,6 @@ export function apply(ctx: Context & { loader: { entries(): Iterable<LoaderEntry
 
   const sandbox = find("docker-sandbox")
   if (sandbox !== undefined && !sandbox.disabled) {
-    // if the sandbox fiber later unloads while its entry is disabled (live toggle off), put the host providers back
     ctx.on("internal/plugin", (fiber: Fiber) => {
       if (fiber.uid || fiber.entry?.options?.id !== "docker-sandbox") return
       if (find("docker-sandbox")?.disabled) restoreHostProviders()

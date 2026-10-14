@@ -1,13 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
-/**
- * The DSH seam packages (`dsh-fs`, `dsh-shell`, …) are provided by the app at
- * runtime and are deliberately not installed here — the plugin compiles against
- * the ambient declarations in `src/types/seams.d.ts`. Unit tests therefore resolve
- * them to minimal stand-ins that carry just the runtime shape the plugin
- * touches: the `Service` base and the error classes it throws.
- */
 const stub = (name: string) => fileURLToPath(new URL(`./test/stubs/${name}.ts`, import.meta.url))
 
 export default defineConfig({

@@ -1,47 +1,25 @@
-/**
- * Client plugin entry: put the container chip in the session header.
- *
- * The seat is `conversation.session.header.utilities`, a session-scoped list
- * slot whose entries get the standard session props (including `sessionId`).
- * Registering a fresh id adds a cell beside the shipped ones; nothing is
- * replaced.
- *
- * @module dsh-docker-sandbox/client
- */
-
 import { createElement } from "react"
 import { ContainerChip } from "./chip.tsx"
 import { SandboxConfigForm, type RowConfigForm } from "./config-form.tsx"
 import { MergeRequestButton } from "./merge-button.tsx"
 import { ReviewButton } from "./review-button.tsx"
 
-/** One entry in a list or keyed slot. */
 interface SlotRegistration {
-  /** Slot this entry belongs to. */
   name: string
-  /** Entry key; a fresh id is added beside the shipped entries. */
   id?: string
-  /** Keyed-slot address, `<bundle package>#<row id>` for row configuration. */
   key?: string
-  /** Position among the entries, ascending. */
   order?: number
-  /** Display text where the owner projects one. */
   label?: string | (() => string)
-  /** Plugin id, for diagnostics. */
   registrant?: string
 }
 
-/** The slice of the client context this plugin uses. */
 export interface ClientContext {
   slots: {
-    /** Run `callback` for each lifetime of the slot's declaration. */
     inject: (key: string, callback: () => (() => void) | void) => () => void
-    /** Register one entry; disposed with the calling fiber. */
     register: (registration: SlotRegistration, render: (props: any) => unknown) => () => void
   }
 }
 
-/** Services the client half needs; Cordis rejects `ctx.slots` without this. */
 export const inject = ["slots"]
 
 export function apply(ctx: ClientContext): void {
@@ -53,9 +31,6 @@ export function apply(ctx: ClientContext): void {
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(ContainerChip, { sessionId: props.sessionId })))
 
-  // The merge-request button, beside the chip. It renders only when the
-  // status route reports a worktree for the chat, so with worktree mode off
-  // the header looks exactly as it did before.
   ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
     name: "conversation.session.header.utilities",
     id: "dsh-docker-sandbox:merge",
@@ -64,8 +39,6 @@ export function apply(ctx: ClientContext): void {
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(MergeRequestButton, { sessionId: props.sessionId })))
 
-  // The review button: spawns a fresh subagent that reviews this session's
-  // changes with no memory of the conversation that made them.
   ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
     name: "conversation.session.header.utilities",
     id: "dsh-docker-sandbox:review",
@@ -74,9 +47,6 @@ export function apply(ctx: ClientContext): void {
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(ReviewButton, { sessionId: props.sessionId })))
 
-  // Give the `docker-sandbox` row a Configure page on the Plugins screen.
-  // The key is `<bundle package>#<row id>`; the page hands the component the
-  // host-synced volatile-config face, and writes persist to the profile patch.
   ctx.slots.inject("plugins.row.config", () => ctx.slots.register({
     name: "plugins.row.config",
     key: "dsh-docker-sandbox#docker-sandbox",

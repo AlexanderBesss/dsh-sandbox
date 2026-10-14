@@ -1,26 +1,10 @@
-/**
- * The session-header merge-request button.
- *
- * Worktree mode gives each conversation its own branch; this button turns
- * that branch into a merge request: commit everything in the worktree, push
- * the branch, and open a GitHub pull request (or report the compare URL when
- * `gh` is not installed). It renders only when the status route reports a
- * worktree for the chat, so a plain shared-workspace session shows nothing.
- *
- * The button never claims success it did not get: a failed push or PR shows
- * the error in the tooltip and turns the label into a retry.
- *
- * @module dsh-docker-sandbox/client/merge-button
- */
 
 import { useCallback, useEffect, useState } from "react"
 import { createMergeRequest, fetchSandboxStatus, type MergeRequestView, type WorktreeView } from "./api.ts"
 
-/** How often the button re-reads the worktree state while mounted. */
 const POLL_MS = 15000
 
 export interface MergeRequestButtonProps {
-  /** The conversation this header belongs to (a standard slot prop). */
   sessionId: string
 }
 
@@ -41,7 +25,6 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
         if (!alive) return
         setWorktree(next.worktree)
       } catch {
-        // The chip already reports a broken sandbox; this button just stays hidden.
       }
     }
     void load()
@@ -80,8 +63,6 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
     )
   }, [phase, result, sessionId])
 
-  // No worktree (mode off, non-git workspace, or none created yet): the
-  // shared-workspace session gets no button.
   if (worktree === undefined) return null
 
   const link = result?.prUrl ?? result?.compareUrl
@@ -97,8 +78,6 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
         ? "retry merge"
         : "merge request"
 
-  // A pushed branch with no pull request is not a success: the amber dot is
-  // what tells the user the merge request still needs them (or a GitHub CLI).
   const opened = result?.prUrl !== undefined
   const dotColor = phase === "done"
     ? opened || result?.prError === undefined

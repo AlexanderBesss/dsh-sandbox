@@ -1,4 +1,3 @@
-// container files are a Docker Desktop bind mount of the Windows workspace; drives mode maps paths by text transform
 export type MountMode = "workspace" | "drives"
 
 export interface SandboxMount {
@@ -6,12 +5,10 @@ export interface SandboxMount {
   containerPath: string
 }
 
-// a worktree's .git file points into the main repo via a Windows path the container cannot see; mount the main .git too
 export interface ExtraMount {
   mount: SandboxMount
   containerGitDir: string
   gitConfig: Record<string, string>
-  // the app hands tools the session's original header cwd; paths under it must alias onto the worktree or be rejected
   aliasHost?: string
 }
 
@@ -108,7 +105,6 @@ export class PathMapper {
       hostPath: workspace,
       containerPath: this.containerWorkspace,
     }]
-    // in drives mode the drive mount already covers the main repo's `.git`; workspace mode needs it explicitly
     if (extra !== undefined) mounts.push(extra.mount)
     return mounts
   }
@@ -124,7 +120,6 @@ export class PathMapper {
     if (raw === "") return root
 
     if (raw.startsWith("/")) {
-      // a drive mount is always lower-cased, so `/F/x` and `/f/x` name one file
       if (this.mode === "drives" && /^\/[a-z](\/|$)/i.test(raw)) {
         return resolveSegments(`/${raw[1]!.toLowerCase()}${raw.slice(2)}`)
       }
@@ -160,7 +155,6 @@ export class PathMapper {
 
     if (isWindowsAbsolute(path)) return this.toContainer(PathMapper.windowsToDrive(path), workspace)
 
-    // a `..` that walks out of the mount is rejected, not resolved to a path the container happens to have
     const resolved = resolveSegments(`${root}/${raw}`)
     if (resolved !== root && !resolved.startsWith(`${root}/`)) {
       throw new SandboxPathError(
@@ -182,12 +176,10 @@ export class PathMapper {
       }
     }
     if (this.mode === "workspace") {
-      // unlike mountsFor, a non-Windows anchor reports "no host path" rather than throwing
       if (!isWindowsAbsolute(workspace)) return undefined
       const root = this.containerRoot()
       if (raw !== root && !raw.startsWith(`${root}/`)) return undefined
       const host = normalize(this.workspaceHostPath(workspace))
-      // `host` is normalized to `F:/…`, so everything after the drive letter already begins with the joining separator
       return `${host.slice(0, 2)}${host.slice(2).replace(/\//g, "\\")}${raw.slice(root.length).replace(/\//g, "\\")}`
     }
     return PathMapper.driveToWindows(raw)

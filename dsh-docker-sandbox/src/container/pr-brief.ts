@@ -6,23 +6,18 @@ import type { PullRequestFacts } from "./pr-description.ts"
 import { forkPointFor } from "./review.ts"
 import { titleSlugFor } from "./session.ts"
 
-// prompt diff budget; the child can run git diff for the rest
 export const BRIEF_DIFF_CHARS = 40_000
 
 export const MAX_BRIEF_BULLETS = 8
 export const MAX_BRIEF_BULLET_CHARS = 200
 
-// slug cap; the id digest is appended after this
 export const MAX_BRANCH_SLUG_CHARS = 40
 
-// extra room for the child to settle after its signal is aborted
 const SETTLE_GRACE_MS = 15000
 
 export interface PullRequestBrief {
-  // ref-safe slug, without the configured prefix
   branchSlug?: string
   title?: string
-  // already clipped to the budget
   bullets: string[]
 }
 
@@ -31,9 +26,7 @@ export type BriefOutcome = { brief: PullRequestBrief } | { error: string }
 export type PrBrief = (sessionId: string, facts: PullRequestFacts) => Promise<BriefOutcome>
 
 export interface PrBriefDeps {
-  // available only once the deferred inject has seen the service
   subagents: () => SubagentService | undefined
-  // the child's delegation parent
   parentFor: (sessionId: string) => LiveAgent | undefined
   git: CliRunner
   config: SandboxConfig
@@ -48,7 +41,6 @@ async function gitText(git: CliRunner, args: string[], cwd: string, timeoutMs: n
   }
 }
 
-// deliberately blunt: a vague branch name or a hedged summary is a failure of this step
 export function buildBriefPrompt(facts: PullRequestFacts, diff: string): string {
   const clipped = diff.length > BRIEF_DIFF_CHARS
     ? `${diff.slice(0, BRIEF_DIFF_CHARS).trimEnd()}\n… (truncated — run \`git diff\` for the rest)`
@@ -118,12 +110,10 @@ function clipBullet(text: string): string {
   return `${(space > 40 ? cut.slice(0, space) : cut).trimEnd()}…`
 }
 
-// a bullet that is really a diff line the child echoed
 function isDiffEcho(body: string): boolean {
   return /^[-+]/.test(body) || /^(@@|diff --git|index [0-9a-f]{6,})/.test(body)
 }
 
-// strict parse: only BRANCH/TITLE lines and non-diff-echo bullets survive; no bullets means failure
 export function parseBrief(text: string): PullRequestBrief | undefined {
   const lines = text.replace(/^[ \t]*```[^\n]*$/gm, "").split(/\r?\n/)
   let branchSlug: string | undefined
@@ -184,7 +174,6 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined
   }
 }
 
-// fail-soft: never throws; a failed pass costs only the naming, never the request
 export function createPrBrief(deps: PrBriefDeps): PrBrief {
   const fallback = "the branch keeps its current name and the description lists commits and diffstat only"
   return async (sessionId, facts) => {
@@ -195,7 +184,6 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
     const parent = deps.parentFor(sessionId)
     if (parent === undefined) return { error: `this session has no live agent to delegate to, so ${fallback}` }
 
-    // one deadline for probes, delegation, and the answer: the merge request blocks here
     const budgetMs = deps.config.prBriefTimeoutMs
     const deadline = Date.now() + budgetMs
     const left = () => Math.max(deadline - Date.now(), 1)
@@ -219,13 +207,11 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
       })
       const run = await within(started, left())
       if (run === undefined) {
-        // a child whose delegation lands after the budget still has to close
         void started.then((late) => { void late.dispose?.() }, () => undefined)
         return { error: `the naming subagent could not be started within ${budgetMs} ms, so ${fallback}` }
       }
       let result: SubagentResult | undefined
       try {
-        // grace for a child that ignores the aborted signal, proportional to the budget
         result = await within(run.result, left() + Math.min(SETTLE_GRACE_MS, budgetMs))
       } catch {
         result = undefined
@@ -233,7 +219,6 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
       try {
         await run.dispose?.()
       } catch {
-        // a child that will not close must not cost the request its naming
       }
       if (result === undefined) {
         return { error: `the naming subagent did not answer within ${budgetMs} ms, so ${fallback}` }

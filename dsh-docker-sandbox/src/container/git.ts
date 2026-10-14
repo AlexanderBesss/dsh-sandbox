@@ -30,7 +30,6 @@ export interface CliRunner {
   run(args: string[], opts?: CliOptions): Promise<CliResult>
 }
 
-// cap per stream: git output is small, a runaway hook is not
 const MAX_CAPTURE = 1024 * 1024
 
 function codesFor(label: "git" | "gh"): { missing: CliFailureCode; failed: CliFailureCode } {
@@ -39,7 +38,6 @@ function codesFor(label: "git" | "gh"): { missing: CliFailureCode; failed: CliFa
     : { missing: "GH_MISSING", failed: "GH_FAILED" }
 }
 
-// runSync serves the sync seam (FileSystem.resolve cannot await); argv entries only, never a shell string
 export function createCliRunner(baseArgv: string[], label: "git" | "gh"): CliRunner {
   const argv0 = baseArgv.length > 0 ? baseArgv[0]! : label
   const rest = baseArgv.length > 1 ? baseArgv.slice(1) : []
@@ -98,7 +96,6 @@ export function createCliRunner(baseArgv: string[], label: "git" | "gh"): CliRun
           if (stderr.length < MAX_CAPTURE) stderr += data.toString("utf8")
         })
         child.stdin?.on("error", () => {
-          // the child may exit before reading everything it was given
         })
         if (opts.input !== undefined) child.stdin?.end(opts.input)
         else child.stdin?.end()
@@ -117,7 +114,6 @@ export function createCliRunner(baseArgv: string[], label: "git" | "gh"): CliRun
         })
         child.once("close", (code) => {
           if (timer !== undefined) clearTimeout(timer)
-          // reject, never throw: a throw here is an uncaught exception; non-zero exits are ordinary (--is-ancestor answers 1)
           if (code !== 0) reject(failure(args, code, stderr))
           else resolve({ stdout, stderr, code: 0 })
         })

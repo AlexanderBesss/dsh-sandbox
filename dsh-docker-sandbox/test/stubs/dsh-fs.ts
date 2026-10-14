@@ -1,5 +1,3 @@
-/** Minimal stand-in for `@deepseek-ai/dsh-fs` (see vitest.config.ts). */
-
 export class FsError extends Error {
   constructor(
     message: string,

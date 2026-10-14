@@ -1,5 +1,3 @@
-// ownership is the dsh.sandbox=1 + dsh.session labels — the GC loop and status route filter on them
-// Docker Desktop shares host drives into its VM natively, so the workspace bind mount is the same bytes the host sees
 
 import { mkdirSync } from "node:fs"
 import { BootstrapLogger, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
@@ -14,7 +12,6 @@ export interface SandboxStatus {
   image: string
   phase: string
   ready: boolean
-  // Windows path of the bind-mounted workspace
   workspace: string
   containerWorkspace: string
   createdAt?: string
@@ -32,16 +29,12 @@ interface ContainerInspect {
 }
 
 export interface ProvisionerHooks {
-  // reclaiming a live chat's container pulls the box out from under the user; true after a plugin reload cleared bookkeeping
   isSessionLive?(sessionId: string): boolean
-  // a stale caller (header outliving the chat, a replay) must not raise a container for an archived chat
   isSessionArchived?(sessionId: string): boolean
-  // fires once per container per process, fire-and-forget, never awaited
   onContainerReady?(target: SandboxTarget): void
 }
 
 function volumeArg(mount: SandboxMount): string {
-  // Docker on Windows accepts forward slashes in the host part; argv never passes a shell, so spaces survive
   return `${mount.hostPath.replace(/\\/g, "/")}:${mount.containerPath}`
 }
 
@@ -91,12 +84,10 @@ export class Provisioner {
       this.paths.containerRoot(target.workspace),
     ]
 
-    // the npm cache is platform-neutral tarballs, safe to share; a container's own cache dies with its writable layer
     if (this.config.npmCacheHost !== "") {
       args.push("-v", volumeArg({ hostPath: this.config.npmCacheHost, containerPath: "/root/.npm" }))
     }
 
-    // the .git file holds a Windows path the container can't resolve; GIT_DIR/GIT_WORK_TREE pin git to the mounted gitdir
     const extra = this.paths.extraMountFor(target.workspace)
     if (extra !== undefined) {
       args.push(
@@ -105,7 +96,6 @@ export class Provisioner {
         "-e",
         `GIT_WORK_TREE=${this.paths.containerRoot(target.workspace)}`,
       )
-      // Git for Windows keeps autocrlf/identity in a config the container can't see; without them, phantom CRLF diffs
       const mirrored = Object.entries(extra.gitConfig)
       if (mirrored.length > 0) {
         args.push("-e", `GIT_CONFIG_COUNT=${mirrored.length}`)
@@ -127,7 +117,6 @@ export class Provisioner {
     return args
   }
 
-  // the agentless container belongs to no chat, so it is exempt; an unwired hook never blocks
   private assertProvisionable(sessionId: string): void {
     if (sessionId === DEFAULT_SESSION_ID) return
     if (this.hooks.isSessionArchived?.(sessionId) === true) {
@@ -146,11 +135,9 @@ export class Provisioner {
 
     const running = this.inflight.get(target.sessionId)
     if (running !== undefined) return await this.awaitProvisioning(running, target, opts.signal)
-    // the in-flight run uses the first caller's target: a later caller's differing workspace loses this round
 
     const run = this.provision(target)
     this.inflight.set(target.sessionId, run)
-    // the run settles on its own result: a caller who stops waiting must not let a second docker run start for the same name
     const settle = (): void => {
       if (this.inflight.get(target.sessionId) === run) this.inflight.delete(target.sessionId)
     }
@@ -158,7 +145,6 @@ export class Provisioner {
     return await this.awaitProvisioning(run, target, opts.signal)
   }
 
-  // cancellation stops only this caller: the run is shared by the chat, and one caller cancelling must not fail the others
   private awaitProvisioning(
     run: Promise<SandboxTarget>,
     target: SandboxTarget,
@@ -186,7 +172,6 @@ export class Provisioner {
     const existing = await this.inspectState(target)
 
     if (existing.state !== undefined && existing.owned !== true) {
-      // adopting it would run this chat in someone else's container; recreating it would delete their work
       const detail = `the container name "${target.container}" is already used by a container this plugin does not own`
       this.errors.set(target.sessionId, detail)
       throw new SandboxUnavailableError(
@@ -204,12 +189,10 @@ export class Provisioner {
       await this.remove(target)
     }
 
-    // docker creates a missing -v source itself, but as a VM-side path; mkdir keeps it a real host directory
     if (this.config.npmCacheHost !== "") {
       try {
         mkdirSync(this.config.npmCacheHost, { recursive: true })
       } catch {
-        // the cache is an optimization, not a correctness requirement: docker run still answers without it
       }
     }
 
@@ -255,7 +238,6 @@ export class Provisioner {
 
   private async inspectState(target: SandboxTarget): Promise<{ state?: string; owned?: boolean }> {
     try {
-      // reading the rendered label map keeps the format string quote-free: Windows argv quoting would not survive quotes
       const result = await this.transport.docker(
         ["inspect", "--format", "{{.State.Status}}|{{.Config.Labels}}", target.container],
         { timeoutMs: 30000 },
@@ -286,13 +268,11 @@ export class Provisioner {
     return this.engineProbe
   }
 
-  // idleness is measured from the last thing that happened to the container, so a long-running command can report progress
   touch(sessionId: string): void {
     const entry = this.tracked.get(sessionId)
     if (entry !== undefined) entry.lastUsedAt = Date.now()
   }
 
-  // GC measures idleness from call start; without a lease it would reclaim a container whose command is still running
   beginWork(sessionId: string): () => void {
     this.activeWork.set(sessionId, (this.activeWork.get(sessionId) ?? 0) + 1)
     this.touch(sessionId)
@@ -385,14 +365,12 @@ export class Provisioner {
     await this.remove(target)
   }
 
-  // app seam workspace/session-stop: the container name derives from the session id, no target lookup needed
   async releaseSession(sessionId: string): Promise<void> {
     this.tracked.delete(sessionId)
     this.errors.delete(sessionId)
     await this.remove({ container: containerNameFor(sessionId) })
   }
 
-  // archiving emits no plugin event: the GC loop polls the archive set; older containers are covered by their labels
   async releaseArchived(archived: ReadonlySet<string>): Promise<string[]> {
     if (archived.size === 0) return []
     const deleted: string[] = []

@@ -16,7 +16,6 @@ interface FakeGitOptions {
   dirty?: string
   merged?: boolean
   unpushed?: string
-  // unset keys exit 1, the way git answers `config --get`
   gitConfig?: Record<string, string>
   gitMissing?: boolean
   mainBranch?: string
@@ -47,7 +46,6 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
       throw new CliCommandError('bad revision', 'GIT_FAILED', '')
     }
     if (args[0] === 'worktree' && args[1] === 'add') {
-      // create the directory the way git would, so later existsSync checks see it
       const path = args.includes('-B') ? args[4]! : args[2]!
       mkdirSync(path, { recursive: true })
       return ok()
@@ -72,7 +70,6 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
     if (args[0] === 'log') return ok(`${options.log ?? ''}\n`)
     if (args[0] === 'diff') return ok(`${options.stat ?? ''}\n`)
     if (args[0] === 'for-each-ref') {
-      // real git has no `--quiet` here and exits 129; the fake keeps that contract
       if (args[1] === '--quiet') throw new CliCommandError("unknown option `quiet'", 'GIT_FAILED', "error: unknown option `quiet'")
       return ok(options.pushedBranch === true ? `refs/remotes/origin/${args[args.length - 1]}\n` : '')
     }
@@ -143,7 +140,6 @@ describe('WorktreeManager.ensure', () => {
     const entry = manager.ensure('session-3', repoRoot)
     const digest = slugDigest('session-3').slice(0, 6)
     expect(entry!.branch).toBe(`dsh-sbx/fix-the-login-crash-${digest}`)
-    // the digest keeps two chats titled alike off each other's branch
     expect(entry!.worktreePath).toBe(join(`${repoRoot}.worktrees`, `fix-the-login-crash-${digest}`))
     expect(calls).toContainEqual(['worktree', 'add', '-B', entry!.branch, entry!.worktreePath, 'HEAD'])
   })
@@ -201,7 +197,6 @@ describe('WorktreeManager.ensure', () => {
     expect(created).toBeDefined()
     expect(existsSync(join(`${repoRoot}.worktrees`, 'registry.json'))).toBe(true)
 
-    // a fresh manager stands in for an app restart: the registry answers, branch still there
     const second = fakeCli({ repoRoot, branchExists: true })
     const found = new WorktreeManager({ git: second.git, gh: second.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
       .lookup('session-3', repoRoot)
@@ -219,7 +214,6 @@ describe('WorktreeManager.ensure', () => {
     const second = fakeCli({ repoRoot, branchExists: true })
     const manager = new WorktreeManager({ git: second.git, gh: second.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
     manager.ensure('session-3', repoRoot)
-    // `add -B` would reset the branch to HEAD and strand the session's commits
     expect(second.calls).toContainEqual(['worktree', 'add', entry.worktreePath, 'dsh-sbx/session-3'])
     expect(second.calls.some((call) => call.includes('-B'))).toBe(false)
   })
@@ -298,7 +292,6 @@ describe('WorktreeManager.mergeRequest', () => {
     const result = await manager.mergeRequest('session-3', repoRoot)
     expect(result.renamedFrom).toMatch(/^dsh-sbx\/also-when-we-create-a-branch-[0-9a-f]{6}$/)
     expect(result.branch).toMatch(/^dsh-sbx\/name-branches-from-content-[0-9a-f]{6}$/)
-    // the rename has to precede the push: that is what makes it safe
     const renamed = calls.findIndex((call) => call[0] === 'branch' && call[1] === '-m')
     const pushed = calls.findIndex((call) => call[0] === 'push')
     expect(renamed).toBeGreaterThanOrEqual(0)
@@ -327,7 +320,6 @@ describe('WorktreeManager.mergeRequest', () => {
       },
     })
     await manager.mergeRequest('session-3', repoRoot)
-    // one staging feeds the pass; the second catches what was written during it
     expect(stagedWhenAsked).toBe(1)
     expect(calls.filter((call) => call[0] === 'add' && call[1] === '-A')).toHaveLength(2)
   })
@@ -380,7 +372,6 @@ describe('WorktreeManager.mergeRequest', () => {
   })
 
   it('describes the branch against HEAD when its fork point is unknown', async () => {
-    // a detached main checkout yields no merge-base, so the branch is described against HEAD
     const repoRoot = tempRoot()
     const { git, gh, calls } = fakeCli({ repoRoot, remote: 'git@github.com:o/r.git', log: 'abc1234 work', stat: ' a.ts | 1 +' })
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })

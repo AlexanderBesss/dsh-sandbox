@@ -12,7 +12,6 @@ import { DeferredStdin } from "../utils/deferred-stdin.ts"
 import { isWindowsPath, type PathMapper } from "../container/paths.ts"
 import { signalProcessGroup } from "../container/process-group.ts"
 import { OutputTail, tailView } from "../utils/output-tail.ts"
-// kept so shell tests can still import OutputTail from this module
 export { OutputTail, tailView }
 import { Provisioner } from "../container/provisioner.ts"
 import { resolveTarget } from "../container/session.ts"
@@ -31,7 +30,6 @@ export interface SubprocessDeps {
   worktrees?: WorktreeManager
 }
 
-// nextOp restarts at 1 on plugin reload while an old fiber's command may still run in a reused container; without the nonce the new op1 would signal the old process group
 const OP_NONCE = Math.random().toString(36).slice(2, 8)
 
 export class DockerSubprocessRuntime extends SubprocessRuntime {
@@ -64,7 +62,6 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
     await this.deps.provisioner.ensure(target)
     const result = await this.deps.transport.execInContainer(
       target,
-      // the name is its own argv element ($1): a name with $(...) would be shell-expanded inside the container
       ["sh", "-c", 'command -v "$1" 2>/dev/null', "sh", name],
       { timeoutMs: 30000 },
     )
@@ -95,7 +92,6 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
 
     const stdoutTail = wantStdout ? new OutputTail(stdoutCap) : undefined
     const stderrTail = wantStderr ? new OutputTail(stderrCap) : undefined
-    // live streams only on request: an unread PassThrough would buffer forever
     const stdoutStream = stdio.stdout === "pipe" ? new PassThrough() : undefined
     const stderrStream = stdio.stderr === "pipe" ? new PassThrough() : undefined
     const stdin = stdio.stdin === "ignore" ? undefined : new DeferredStdin()
@@ -104,7 +100,6 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
       .filter(([, value]) => value !== undefined)
       .map(([key, value]) => `${key}=${value as string}`)
 
-    // callers pass the session's Windows cwd; the container needs its own form
     const cwd = spec.cwd === undefined ? "-" : this.deps.paths.toContainer(spec.cwd, target.workspace)
 
     const containerArgv = [
@@ -124,7 +119,6 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
     let escalationTimer: NodeJS.Timeout | undefined
     let kill: ((signal?: NodeJS.Signals) => void) | undefined
 
-    // lease: GC measures idleness from call start, so a command longer than idleTtlMs would lose its container mid-run; also refreshes the idle clock on finish
     const releaseWork = this.deps.provisioner.beginWork(target.sessionId)
 
     const run = (async (): Promise<SubprocessOutcome> => {
@@ -141,7 +135,6 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
         stderrStream?.write(chunk)
       })
       live.child.stdin.on("error", () => {
-        // the command may exit before consuming everything written to it
       })
 
       if (stdin) stdin.attach(live.child.stdin)
@@ -172,7 +165,6 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
       },
     )
 
-    // the grace timer belongs to terminate(), not to a waiter: a cancel landing during waitForExit still escalates, a plain await never arms it
     const armEscalation = (): void => {
       if (settled || escalationTimer !== undefined) return
       escalationTimer = setTimeout(() => {
@@ -186,7 +178,6 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
     const terminate = () => {
       killRequested = true
       kill?.()
-      // the pidfile appears a moment after the exec starts; keep looking so a cancel in that window still lands
       void signalProcessGroup(this.deps.transport, target, op, "TERM", { waitForPidfileMs: 2000 }).catch(() => undefined)
       armEscalation()
     }

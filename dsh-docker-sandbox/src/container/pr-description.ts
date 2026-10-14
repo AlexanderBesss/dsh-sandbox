@@ -1,4 +1,3 @@
-// GitHub rejects bodies over 64 KiB
 export const MAX_BODY_CHARS = 20_000
 
 const TITLE_MAX = 100
@@ -12,18 +11,12 @@ export interface PullRequestFacts {
   worktreePath: string
   mainWorkspace: string
   container: string
-  // fork point sha, when known
   base?: string
-  // git log --oneline; "" when none
   log: string
-  // git diff --stat against the fork point; "" when nothing changed
   stat: string
-  // the button produced the commit itself
   committed: boolean
   title?: string
-  // absent when the naming pass was off, unavailable, or refused — commits and diffstat below are never replaced
   summary?: string[]
-  // outranks the chat title, which may be a first message rather than a description
   briefTitle?: string
 }
 
@@ -33,17 +26,14 @@ function clip(text: string, max: number): string {
   return `${trimmed.slice(0, max).trimEnd()}\n… (truncated)`
 }
 
-// title by who knows best: the naming pass, then the chat title, then the branch humanized
 export function prTitleFor(facts: Pick<PullRequestFacts, "title" | "branch" | "briefTitle">): string {
   const proposed = facts.briefTitle?.trim()
   if (proposed !== undefined && proposed !== "") return proposed.slice(0, TITLE_MAX)
   const title = facts.title?.trim()
   if (title !== undefined && title !== "") return title.slice(0, TITLE_MAX)
   const leaf = facts.branch.split("/").pop() ?? facts.branch
-  // a session-id branch has nothing readable to humanize; the branch itself is the honest title
   if (/^session[-_]/.test(leaf)) return facts.branch
   const words = leaf
-    // drop the uniqueness digest so the phrase ends on a word, not hex
     .replace(/-[0-9a-f]{6,}$/, "")
     .replace(/[-_]+/g, " ")
     .trim()

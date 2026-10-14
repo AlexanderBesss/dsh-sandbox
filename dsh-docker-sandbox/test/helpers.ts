@@ -2,7 +2,6 @@ import type { DockerTransport } from '../src/container/transport.ts'
 import { SandboxUnavailableError } from '../src/container/transport.ts'
 import type { SandboxConfig } from '../src/config.ts'
 
-// unwraps `Volatile` references so tests can spell plain values
 type Plain<T> = T extends { get(): infer U } ? U
   : T extends readonly unknown[] ? T
   : T extends object ? { [K in keyof T]: Plain<T[K]> }
@@ -14,7 +13,6 @@ function ref<T>(v: T): { get(): T } {
   return { get: () => v }
 }
 
-// spells out every field on purpose: when the schema grows, the typecheck fails here first
 export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): SandboxConfig {
   const plain = {
     dockerArgv: ['docker'],
@@ -51,7 +49,6 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     ...overrides,
   }
   plain.resourceLimits = { cpu: '', memory: '', memorySwap: '', ...overrides.resourceLimits }
-  // the runtime wraps every `volatile()` leaf in a reference; the fixture mirrors that
   return {
     ...plain,
     image: ref(plain.image),
@@ -80,21 +77,17 @@ export interface RecordedCall {
 }
 
 export interface FakeEngine {
-  // answer for `docker inspect --format {{.State.Status}} …`; undefined means "no such container"
   state?: string
   inspect?: unknown[]
   owned?: { id: string; name: string; state: string; created?: string; sessionId?: string }[]
-  // text the in-container probe script prints
   probe?: string
   runFails?: boolean
   engineDown?: boolean
-  // the container already holding this name is not one this plugin owns
   foreign?: boolean
 }
 
 export function fakeTransport(engine: FakeEngine = {}): { transport: DockerTransport; calls: RecordedCall[] } {
   const calls: RecordedCall[] = []
-  // tracks container existence like the real engine: `run` makes it running, `rm` clears it
   let state = engine.state
   const ok = {
     stdout: Buffer.alloc(0),
@@ -129,7 +122,6 @@ export function fakeTransport(engine: FakeEngine = {}): { transport: DockerTrans
       }
       if (args[0] === 'inspect' && args[1] === '--format') {
         if (state === undefined) fail(`Error: No such object: ${args[3]}`)
-        // the real inspect format renders `<state>|map[dsh.sandbox:1 …]`
         const labels = engine.foreign === true ? 'map[someone-elses:yes]' : 'map[dsh.sandbox:1]'
         return { ...ok, stdout: Buffer.from(`${state}|${labels}\n`) }
       }
@@ -145,7 +137,6 @@ export function fakeTransport(engine: FakeEngine = {}): { transport: DockerTrans
     async dockerJson<T>(args: string[]) {
       calls.push({ kind: 'dockerJson', args })
       if (args[0] !== 'inspect') fail(`unexpected dockerJson call: ${args.join(' ')}`)
-      // `docker inspect <id> <id>…` is the owned sweep vs `docker inspect <name>`
       if (args.length > 2) return (engine.owned ?? []).map(inspectOf) as unknown as T
       if (engine.inspect === undefined && state === undefined) fail(`Error: No such object: ${args[1]}`)
       return (engine.inspect ?? [{ Name: `/${args[1]}`, State: { Status: state }, Created: '2026-10-13T08:00:00Z' }]) as unknown as T

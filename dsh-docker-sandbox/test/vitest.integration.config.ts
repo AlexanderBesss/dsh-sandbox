@@ -1,7 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
-// DSH_DOCKER is set here, not in the npm script: that would need a POSIX shell, so the script stays portable
 export default defineConfig({
   resolve: {
     alias: {

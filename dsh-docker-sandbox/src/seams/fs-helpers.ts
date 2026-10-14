@@ -24,7 +24,6 @@ export function typeOf(st: FileStat): FsFileType {
   return "other"
 }
 
-// same shape the in-container helpers report, so a token read through one path guards a write through the other
 export function tokenOf(st: { size: number; mtimeMs: number }): FsVersion {
   return `${st.size}-${Math.floor(st.mtimeMs / 1000)}` as FsVersion
 }
@@ -37,12 +36,10 @@ export function isDirectory(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "EISDIR"
 }
 
-// checked between host calls, not mid-call, so a large tree walk still exits promptly
 export function checkSignal(signal?: AbortSignal): void {
   if (signal?.aborted) throw new FsError("the operation was cancelled", "FS_IO_ERROR")
 }
 
-// fallback when the follow-up stat failed
 export function typeOfDirent(dirent: Dirent): FsFileType {
   if (dirent.isSymbolicLink()) return "symlink"
   if (dirent.isDirectory()) return "directory"

@@ -22,18 +22,16 @@ describe('containerNameFor', () => {
   })
 
   it('sanitizes characters a container name cannot carry', () => {
-    // a rewritten slug carries the id's digest: slug + digest, not the bare slug
     const name = containerNameFor('agent/worker 7')
     expect(name.startsWith(`${CONTAINER_PREFIX}agent-worker-7-`)).toBe(true)
     expect(name).toMatch(DOCKER_NAME)
   })
 
   it('separates two ids that sanitize to the same slug', () => {
-    // `Session_42` and `session-42` strip to one slug; without a digest one chat runs in the other's box
     const upper = containerNameFor('Session_42')
     const plain = containerNameFor('session-42')
     expect(upper).not.toBe(plain)
-    expect(plain).toBe(`${CONTAINER_PREFIX}session-42`) // lossless ids keep the bare slug
+    expect(plain).toBe(`${CONTAINER_PREFIX}session-42`) 
     expect(upper.startsWith(`${CONTAINER_PREFIX}session-42-`)).toBe(true)
   })
 
@@ -54,14 +52,12 @@ describe('containerNameFor', () => {
   })
 
   it('separates two long ids that share a prefix', () => {
-    // truncating the slug alone would name one container for both chats
     const base = 'x'.repeat(60)
     const first = containerNameFor(`${base}-one`)
     const second = containerNameFor(`${base}-two`)
     expect(first).not.toBe(second)
     expect(first).toMatch(DOCKER_NAME)
     expect(second).toMatch(DOCKER_NAME)
-    // still readable: the conversation id's prefix survives
     expect(first.startsWith(`${CONTAINER_PREFIX}${base.slice(0, 38)}`)).toBe(true)
   })
 })
@@ -113,7 +109,6 @@ describe('resolveTarget', () => {
 
 describe('targetForSession', () => {
   it('names a conversation with no initiating agent, reading its workspace from the store', () => {
-    // the terminal panel spawns from the UI: the request names the conversation, so that routes it
     const ctx = {
       agents: { currentInitiator: () => undefined },
       sessions: { get: (id: string) => ({ id, header: { cwd: 'F:\\Projects\\stored' } }) },
@@ -127,7 +122,6 @@ describe('targetForSession', () => {
   })
 
   it('moves a session onto its worktree when the manager gives it one', () => {
-    // worktree mode: the carved-from checkout rides along for the UI and the merge flow
     const ctx = {
       agents: { currentInitiator: () => undefined },
       sessions: { get: (id: string) => ({ id, header: { cwd: 'F:\\Projects\\stored' } }) },
@@ -153,7 +147,6 @@ describe('targetForSession', () => {
   })
 
   it('keeps the shared workspace when the manager declines one', () => {
-    // non-git workspace or sticky creation failure: behaves as before worktree mode existed
     const ctx = {
       agents: { currentInitiator: () => undefined },
       sessions: { get: (id: string) => ({ id, header: { cwd: 'F:\\Projects\\stored' } }) },
@@ -179,7 +172,6 @@ describe('titleSlugFor', () => {
 
   it('folds accents, and treats an undecomposable one as a separator', () => {
     expect(titleSlugFor('Café au lait')).toBe('cafe-au-lait')
-    // `ø` has no NFKD decomposition, so it separates rather than becoming `o`
     expect(titleSlugFor('Ünicødé')).toBe('unic-de')
   })
 
@@ -201,7 +193,6 @@ describe('branchSlugFor', () => {
   })
 
   it('separates two conversations that carry the same title', () => {
-    // two chats named alike would otherwise share one branch and commit onto each other's work
     expect(branchSlugFor('Fix the crash', 'session-3')).not.toBe(branchSlugFor('Fix the crash', 'session-4'))
   })
 

@@ -27,7 +27,6 @@ function fakeHandle(options: { exit?: { exitCode: number | null; signal: string 
     collected: { stdout, stderr },
     stdout,
     stderr,
-    // no `exit` means a background process nobody has awaited: `done` stays open so tests can poll readOutput
     done: options.exit === undefined
       ? new Promise(() => undefined)
       : Promise.resolve(options.exit),
@@ -74,7 +73,6 @@ describe('DockerShellExecutor.readOutput', () => {
     expect(process.readOutput().delta).toContain('warning one')
 
     handle.stderr.append(Buffer.from('warning two\n'))
-    // a cursor shared with stdout never moved: it would hand the first warning back a second time
     const second = process.readOutput().delta
     expect(second).toContain('warning two')
     expect(second).not.toContain('warning one')
@@ -122,7 +120,6 @@ describe('DockerShellExecutor.execute', () => {
   })
 
   it('keeps a stamped spec on the container it was resolved for', async () => {
-    // the stamp is the binding: executing while another chat is initiator must not re-route it
     const handle = fakeHandle({ exit: { exitCode: 0, signal: null, killed: false } })
     const stamped = makeExecutor(handle).resolve({ command: 'true' })
     expect(stamped.container).toBe('dsh-sbx-session-1')

@@ -61,7 +61,6 @@ describe.skipIf(!enabled)('live Docker sandbox', () => {
   it('stops a running command by signalling its process group', async () => {
     const live = transport.spawnInContainer(target, ['sh', '/tmp/.dsh-run.sh', 'op-kill', '-', 'sleep', '120'])
 
-    // the runner records the pid it exec'd; that pid is also the process group
     let pid = ''
     for (let attempt = 0; attempt < 20 && pid === ''; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -84,7 +83,6 @@ describe.skipIf(!enabled)('live Docker sandbox', () => {
   })
 
   it('shares the workspace bytes between host operations and the container', async () => {
-    // the guarantee the design rests on: the bind mount carries the same bytes in both directions
     const name = `.dsh-mount-${Date.now()}.txt`
     const hostFile = join(process.cwd(), name)
     await writeFile(hostFile, 'hello from host')

@@ -10,7 +10,6 @@ describe('createCliRunner.run', () => {
   })
 
   it('rejects (not throws) when the child exits non-zero', async () => {
-    // `merge-base --is-ancestor` answers 1 for "not merged": must reject; a throw crashed the app host
     const runner = createCliRunner([process.execPath, '-e'], 'git')
     await expect(runner.run(['process.exit(3)'])).rejects.toThrow(CliCommandError)
   })

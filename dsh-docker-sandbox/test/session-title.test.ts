@@ -4,14 +4,11 @@ import type { SandboxContext } from '../src/context.ts'
 
 interface FakeCtxOptions {
   title?: string
-  // the title service can be isolated or disposed at runtime
   titleThrows?: boolean
-  // the session's durable log; absent means the session carries no reader
   events?: unknown[]
   live?: boolean
 }
 
-// one logged human message, in the shape `dsh-session` writes
 function userMessage(text: string, kind = 'user'): unknown {
   return { type: 'user/message', data: { source: { kind }, content: [{ type: 'text', text }] } }
 }
@@ -43,7 +40,6 @@ describe('createSessionTitleReader', () => {
   })
 
   it('falls back to the first human message while the app has no title yet', () => {
-    // the worktree is created before the title service appends its event; the first message is logged
     const reader = createSessionTitleReader(fakeCtx({
       events: [userMessage('Rename the branch to something readable')],
     }))

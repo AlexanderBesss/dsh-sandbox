@@ -1,5 +1,3 @@
-// capped tail: drops from the front at the cap and reports the loss on every read
-
 import type { OutputTail as SeamOutputTail } from "@deepseek-ai/dsh-subprocess"
 
 export class OutputTail {
@@ -40,7 +38,6 @@ export class OutputTail {
     return this.readFrom(this.startOffset)?.text ?? ""
   }
 
-  // never undefined: the search provider reads undefined as "no output", failing ripgrep runs with empty stderr
   readFrom(offset: number): { text: string; nextOffset: number; lossy: boolean } {
     const from = Math.max(offset, this.startOffset)
     const lossy = this.dropped || offset < this.startOffset

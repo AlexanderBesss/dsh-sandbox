@@ -1,31 +1,13 @@
-/**
- * The session-header chip.
- *
- * It answers one question in the place the question is asked: *which container
- * is this conversation running in?* The name is the container name the plugin
- * derives from the session id, so it is the same string `docker ps` shows —
- * clicking it copies the name for pasting into a terminal.
- *
- * The chip never hides a broken sandbox: an unreachable engine shows as a
- * warning state with the reason in its tooltip, because a silently missing chip
- * would read as "no sandbox", which is the opposite of the truth.
- *
- * @module dsh-docker-sandbox/client/chip
- */
-
 import { useCallback, useEffect, useState } from "react"
 import { fetchSandboxStatus, type SandboxStatusView } from "./api.ts"
 
-/** How often the chip re-reads its status while mounted. */
 const POLL_MS = 15000
 
-/** One state row for the tooltip. */
 function row(label: string, value: string | undefined): string {
   return value === undefined || value === "" ? "" : `${label}: ${value}\n`
 }
 
 export interface ContainerChipProps {
-  /** The conversation this header belongs to (a standard slot prop). */
   sessionId: string
 }
 

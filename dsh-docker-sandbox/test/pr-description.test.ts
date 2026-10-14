@@ -27,8 +27,6 @@ describe('prTitleFor', () => {
   })
 
   it('reads the branch back as a phrase when the app has no title', () => {
-    // The uniqueness digest is dropped: a pull-request list should not end a
-    // sentence in hex.
     expect(prTitleFor(facts({ branch: 'dsh-sbx/fix-the-login-crash-1a2b3c' }))).toBe('Fix the login crash')
   })
 
@@ -44,7 +42,6 @@ describe('prTitleFor', () => {
   })
 
   it('prefers the naming pass over the chat title', () => {
-    // A chat is often named after its first message, not after the change.
     expect(prTitleFor(facts({ title: 'Also, when we create a branch', briefTitle: 'Name the branch from the change' })))
       .toBe('Name the branch from the change')
     expect(prTitleFor(facts({ title: 'Fix the login crash', briefTitle: '  ' }))).toBe('Fix the login crash')

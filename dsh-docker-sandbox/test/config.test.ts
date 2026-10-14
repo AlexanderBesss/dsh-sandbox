@@ -14,15 +14,12 @@ describe('Config', () => {
   })
 
   it('accepts the three ripgrep sources and rejects a typo at load', () => {
-    // A free string would let "pacakge" silently take the package branch.
     expect(Config({ ripgrepSource: 'url' }).ripgrepSource).toBe('url')
     expect(Config({ ripgrepSource: 'none' }).ripgrepSource).toBe('none')
     expect(() => Config({ ripgrepSource: 'pacakge' } as never)).toThrow()
   })
 
   it('bounds the numbers whose absence misbehaves at runtime', () => {
-    // gcIntervalMs 0 turns the GC sweep into a busy loop of docker calls;
-    // provisionTimeoutMs 0 kills the very first engine call.
     expect(() => Config({ gcIntervalMs: 0 })).toThrow()
     expect(() => Config({ provisionTimeoutMs: 0 })).toThrow()
     expect(() => Config({ graceMs: -1 })).toThrow()
@@ -39,8 +36,6 @@ describe('Config', () => {
   })
 
   it('lets worktree mode be toggled live', () => {
-    // The plugin manager writes volatile leaves straight into the running
-    // config; the worktree manager reads the toggle on every call.
     expect(Config({ worktree: true }).worktree.get()).toBe(true)
   })
 })

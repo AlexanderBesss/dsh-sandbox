@@ -6,7 +6,6 @@ import { createWarmInstall, installCommandFor } from '../src/container/warm-inst
 import type { WorktreeEntry } from '../src/container/worktrees.ts'
 import { testConfig, fakeTransport } from './helpers.ts'
 
-// fixture worktree: a lockfile and no node_modules, exactly what `git worktree add` leaves behind
 const root = mkdtempSync(join(tmpdir(), 'dsh-warm-'))
 const worktreePath = join(root, 'wt')
 mkdirSync(worktreePath)

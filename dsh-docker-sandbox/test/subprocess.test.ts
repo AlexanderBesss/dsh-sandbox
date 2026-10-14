@@ -52,7 +52,6 @@ describe('OutputTail', () => {
   })
 
   it('answers an empty stream with empty text, never undefined', () => {
-    // the shipped search provider reads `stderr.readFrom(0)` every run; undefined fails the search
     expect(new OutputTail(16).readFrom(0)).toEqual({ text: '', nextOffset: 0, lossy: false })
   })
 
@@ -65,7 +64,6 @@ describe('OutputTail', () => {
     expect(tail.bytes).toBe(12)
     expect(tail.text).toBe('fghijkl')
     expect(tail.lossy).toBe(true)
-    // the caller asked for offset 0, which is gone: the read says so
     expect(tail.readFrom(0)).toEqual({ text: 'fghijkl', nextOffset: 12, lossy: true })
   })
 
@@ -90,7 +88,6 @@ describe('isPackagedRipgrep', () => {
 
 describe('DockerSubprocessRuntime.resolveExecutable', () => {
   it('passes the name as its own argv element, never into the script', async () => {
-    // a name carrying `$(...)` must not be expanded by the container shell
     const calls: string[][] = []
     const transport = {
       execInContainer: (_target: unknown, argv: string[]) => {
@@ -107,7 +104,6 @@ describe('DockerSubprocessRuntime.resolveExecutable', () => {
 
 describe('DockerSubprocessRuntime.waitForExit', () => {
   it('leaves a running command alone until a termination is requested', async () => {
-    // waitForExit alone is a plain await: grace escalation must not arm and SIGKILL a healthy run
     let killed = false
     const exit = Promise.withResolvers<{ code: number | null; signal: string | null }>()
     const transport = {
@@ -149,7 +145,6 @@ describe('DockerSubprocessRuntime.waitForExit', () => {
   })
 
   it('escalates when the termination lands during the wait', async () => {
-    // the shipped executor escalates TERM→KILL regardless of who awaits: wait-then-cancel must not hang
     let killed = false
     const exit = Promise.withResolvers<{ code: number | null; signal: string | null }>()
     const transport = {

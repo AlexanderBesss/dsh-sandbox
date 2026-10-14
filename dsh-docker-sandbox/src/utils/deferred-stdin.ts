@@ -1,6 +1,3 @@
-// buffers writes until attach() connects the child; end() before attach is replayed; past the cap write() reports backpressure
-
-// pre-attach buffer cap: past it, writes report backpressure
 const BUFFER_CAP_BYTES = 8 * 1024 * 1024
 
 export class DeferredStdin {
@@ -52,7 +49,6 @@ export class DeferredStdin {
 
   private push(chunk: any): boolean {
     const data: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
-    // after attach the child's backpressure is the truth, before it the cap is — never a constant true
     if (this.live) return this.live.write(data)
     this.buffered.push(data)
     this.bufferedBytes += data.length
@@ -74,7 +70,6 @@ export class DeferredStdin {
     for (const chunk of this.buffered.splice(0)) child.write(chunk)
     this.bufferedBytes = 0
     if (this.ended) child.end()
-    // a caller held at the cap can resume now that the buffer is gone
     this.fireDrain()
   }
 }

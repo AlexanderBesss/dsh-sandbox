@@ -104,7 +104,6 @@ describe('PathMapper.toContainer (drives mode)', () => {
   })
 
   it('normalises a drive mount written with a capital letter', () => {
-    // `/F/x` and `/f/x` are one file: the mount point is always lower-cased.
     expect(mapper.toContainer('/F/tmp/x', WINDOWS)).toBe('/f/tmp/x')
   })
 
@@ -121,8 +120,6 @@ describe('PathMapper.toWindows', () => {
   })
 
   it('reports no host path when the anchor itself is not a Windows path', () => {
-    // `mountsFor` refuses this anchor; `toWindows` answers "no host file"
-    // instead, so a caller anchoring on a container path still gets a target.
     const mapper = new PathMapper('workspace', '/workspace')
     expect(mapper.toWindows('/workspace/src/a.ts', '/workspace')).toBeUndefined()
   })

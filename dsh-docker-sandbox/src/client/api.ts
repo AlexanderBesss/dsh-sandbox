@@ -29,11 +29,8 @@ export interface MergeRequestView {
   prUrl?: string
   compareUrl?: string
   prError?: string
-  // the rename happens before the push, so the remote never sees the old name
   renamedFrom?: string
-  // set when the naming pass proposed a name that was not applied
   nameNote?: string
-  // set when there was no naming pass (no subagent service, timeout, …)
   briefError?: string
 }
 
@@ -55,7 +52,6 @@ export async function fetchSandboxStatus(sessionId: string): Promise<SandboxStat
   return body.data
 }
 
-// POST: changes state; the route requires the browser's same-origin `Origin`
 export async function createMergeRequest(sessionId: string): Promise<MergeRequestView> {
   const response = await fetch(`/sandbox/api/merge-request?session=${encodeURIComponent(sessionId)}`, {
     method: "POST",
@@ -70,7 +66,6 @@ export async function createMergeRequest(sessionId: string): Promise<MergeReques
   return body.data
 }
 
-// POST: starts work; the review subagent has no memory of this conversation — the route hands it the collected diff
 export async function requestReview(sessionId: string): Promise<ReviewView> {
   const response = await fetch(`/sandbox/api/review?session=${encodeURIComponent(sessionId)}`, {
     method: "POST",

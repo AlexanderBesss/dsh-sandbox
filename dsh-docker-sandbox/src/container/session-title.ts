@@ -1,9 +1,7 @@
-// chat titles come from the app's dsh-session-title service; reading one is a convenience, never a dependency
 import type { SandboxContext } from "../context.ts"
 
 export type SessionTitleReader = (sessionId: string) => string | undefined
 
-// sampled from the live app's title service, not declared by this package
 interface TitleServiceSlice {
   get?(session: unknown): { title?: string } | undefined
 }
@@ -16,7 +14,6 @@ interface LoggedEvent {
   }
 }
 
-// eligibility must match the title service's (user/message from a user source with visible text) so fallbacks agree
 function firstPromptText(events: unknown[]): string | undefined {
   for (const item of events) {
     const event = item as LoggedEvent
@@ -31,7 +28,6 @@ function firstPromptText(events: unknown[]): string | undefined {
   return undefined
 }
 
-// the worktree is created on the first tool call, when the title may still be generating; fall back to the first message
 export function createSessionTitleReader(ctx: SandboxContext): SessionTitleReader {
   return (sessionId: string): string | undefined => {
     try {
@@ -39,7 +35,6 @@ export function createSessionTitleReader(ctx: SandboxContext): SessionTitleReade
       if (session === undefined) return undefined
       let folded: string | undefined
       try {
-        // strict lookup: an isolated or disposed service answers undefined rather than a value its fiber no longer keeps live
         const titles = ctx.get("sessionTitle") as TitleServiceSlice | undefined
         const value = titles?.get?.(session)?.title
         if (typeof value === "string" && value.trim() !== "") folded = value.trim()
@@ -50,7 +45,6 @@ export function createSessionTitleReader(ctx: SandboxContext): SessionTitleReade
       const events = session.snapshotEvents?.()
       return events === undefined ? undefined : firstPromptText(events)
     } catch {
-      // naming is a convenience: a failed lookup must never fail the tool call that is creating the worktree
       return undefined
     }
   }

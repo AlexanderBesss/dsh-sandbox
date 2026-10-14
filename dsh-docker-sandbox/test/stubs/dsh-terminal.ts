@@ -1,5 +1,3 @@
-/** Minimal stand-in for `@deepseek-ai/dsh-terminal` (see vitest.config.ts). */
-
 export class TerminalError extends Error {
   constructor(
     message: string,

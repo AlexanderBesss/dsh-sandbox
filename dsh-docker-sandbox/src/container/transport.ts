@@ -1,5 +1,3 @@
-// the docker CLI is a native Windows binary, so calls are spawned directly with one argv entry per argument — never through a shell.
-// docker exec propagates the in-container exit code cleanly and adds no stderr note, so no output scrubbing is needed here.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import type { SandboxConfig } from "../config.ts"
@@ -50,7 +48,6 @@ export interface ExecResult {
 export interface LiveProcess {
   child: ChildProcessWithoutNullStreams
   done: Promise<{ code: number | null; signal: string | null }>
-  // kills only the local docker client, not the in-container process
   kill(signal?: NodeJS.Signals): void
 }
 
@@ -68,7 +65,6 @@ class StreamCapture {
     }
     this.captured += data.length
     this.chunks.push(data)
-    // an oversized chunk is kept whole (bounded overshoot) but still flags truncation: the stream is not complete
     if (this.captured > this.maxBytes) this.truncated = true
   }
 
@@ -79,7 +75,6 @@ class StreamCapture {
 
 function classify(argv: string[], code: number | null, stderr: Buffer): SandboxUnavailableError {
   const text = stderr.toString("utf8").trim()
-  // case-insensitive: the CLI capitalizes its messages, and a case-sensitive match would downgrade them to EXEC_FAILED
   if (/cannot connect to the docker daemon|is the docker daemon running|error during connect|docker daemon is not running|connection refused|connection reset|npipe/i.test(text)) {
     return new SandboxUnavailableError(
       `the Docker daemon is not reachable from ${argv.join(" ")}: ${text.split("\n")[0]}`,
@@ -152,7 +147,6 @@ export class DockerTransport {
     live.child.stdout.on("data", (data: Buffer) => out.onData(data))
     live.child.stderr.on("data", (data: Buffer) => err.onData(data))
     live.child.stdin.on("error", () => {
-      // the child may exit before reading all of stdin
     })
 
     if (opts.stdin !== undefined) live.child.stdin.end(opts.stdin)
@@ -217,7 +211,6 @@ export class DockerTransport {
     }
   }
 
-  // docker exec has no `--` separator (the CLI would try to exec it): the first container argv entry must not start with `-`
   execInContainer(
     target: { container: string },
     containerArgv: string[],

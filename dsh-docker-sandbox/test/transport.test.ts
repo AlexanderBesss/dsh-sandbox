@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DockerTransport, SandboxUnavailableError, isMissingContainerError } from '../src/container/transport.ts'
 
-// fake docker args must not include a bare `inspect`: node parses it as its inspector subcommand
 function fakeCli(script: string): DockerTransport {
   return new DockerTransport({ dockerArgv: [process.execPath, '-e', script] })
 }
@@ -33,7 +32,6 @@ describe('DockerTransport.exec', () => {
   })
 })
 
-// classification regexes rot when the CLI rewords: these stderr shapes use its real capitalisation
 describe('DockerTransport.docker classification', () => {
   it('classifies an unreachable daemon, matching the CLI capitalisation', async () => {
     const transport = fakeCli(

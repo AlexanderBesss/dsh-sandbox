@@ -25,7 +25,6 @@ function writeJson(request: IncomingMessage, res: ServerResponse, status: number
   res.end(request.method === "HEAD" ? undefined : payload)
 }
 
-// the app renderer sends a dsh-app: origin or none; a cross-site page cannot omit Origin, so a missing one is local
 export function sameOrigin(request: IncomingMessage): boolean {
   const host = request.headers.host
   if (host === undefined) return false
@@ -53,7 +52,6 @@ function settlementSummary(stopReason: string | undefined): string {
   }
 }
 
-// mirrors the app's own settlement notice (subagent-settled), shaped as a user message the Agent inbox accepts
 export function settlementMessage(childId: string, result: SubagentResult | undefined): DurableUserMessage {
   const summary = settlementSummary(result?.stopReason)
   const closing = (result?.output ?? []).filter(
@@ -72,7 +70,6 @@ export function settlementMessage(childId: string, result: SubagentResult | unde
   }
 }
 
-// must never reject (unhandled = uncaught in the host); settle and dispose the run or its child stays resident
 export async function settleReviewRun(
   ctx: SandboxContext,
   run: SubagentRun,
@@ -88,7 +85,6 @@ export async function settleReviewRun(
   try {
     await run.dispose?.()
   } catch {
-    // disposal failure must not cost the parent its verdict
   }
   try {
     const parent = ctx.agents?.get?.(sessionId)
@@ -97,7 +93,6 @@ export async function settleReviewRun(
     if (parent.status === "running" && parent.steer !== undefined) parent.steer(message)
     else parent.followup?.(message)
   } catch {
-    // nothing to deliver to; the review still ran and its log stands
   }
 }
 
@@ -106,7 +101,6 @@ export interface StatusDeps {
   paths: PathMapper
   config: SandboxConfig
   worktrees?: WorktreeManager
-  // thunk: the deferred inject may fill it only after registration
   subagents?: () => SubagentService | undefined
 }
 
@@ -137,10 +131,8 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
           writeJson(request, response, 400, { ok: false, error: { code: "bad-request", message: "a session id is required" } })
           return
         }
-        // the workspace comes from the session store, not the request: the chip must not ask about an arbitrary directory
         const headerCwd = ctx.sessions?.get?.(sessionId)?.header?.cwd
         const workspace = typeof headerCwd === "string" && headerCwd !== "" ? headerCwd : deps.config.workspaceRoot
-        // the raw checkout, not the worktree: the provisioner reports the container it has; the worktree rides along below
         const target: SandboxTarget = {
           sessionId,
           container: containerNameFor(sessionId),
@@ -210,7 +202,6 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
             })
             return
           }
-          // start resolves at inbox acceptance, not review completion — settle the run in the background, like app delegation
           const run = await subagents.start(provider, {
             prompt: [{ type: "text", text: buildReviewPrompt(bundle.entry, bundle.changes) }],
             parent,
@@ -225,7 +216,6 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
           })
           return
         }
-        // read-only peek: opening a chat never runs `git worktree add`
         const worktree = await deps.worktrees?.info(sessionId, workspace)
         const worktreeError = deps.worktrees?.failureFor(sessionId)
         writeJson(request, response, 200, {

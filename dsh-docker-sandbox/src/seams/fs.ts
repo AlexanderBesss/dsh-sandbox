@@ -1,4 +1,3 @@
-// host-backed on purpose: a container-backed fs would provision a container just to render the sidebar tree
 
 import { watch as nodeWatch, type Dirent, type FSWatcher } from "node:fs"
 import { lstat, mkdir, open, readdir, readFile, writeFile } from "node:fs/promises"
@@ -39,10 +38,8 @@ import type { WorktreeManager } from "../container/worktrees.ts"
 
 const DIFF_BASIS_MAX_BYTES = 64_000
 
-// editors save in bursts; collapse each burst into one notification
 const WATCH_DEBOUNCE_MS = 150
 
-// big enough to pipeline stats, small enough to stay responsive to cancellation
 const STAT_BATCH = 64
 
 export function endingsAdapted(text: string, oldText: string, newText: string): [string, string] {
@@ -84,7 +81,6 @@ export class DockerFileSystem extends FileSystem {
     }
   }
 
-  // inside a conversation the session's workspace is the root; agentless calls anchor on the explicit cwd
   private targetFor(path: string, cwd?: string): FsTarget {
     const session = this.trySession()
     const anchor = session?.workspace ?? cwd ?? (isWindowsAbsolute(path) ? path : undefined)
@@ -97,7 +93,6 @@ export class DockerFileSystem extends FileSystem {
     const joined = cwd !== undefined && !path.startsWith("/") && !isWindowsAbsolute(path) ? `${cwd}/${path}` : path
     const containerPath = this.deps.paths.toContainer(joined, anchor)
     const hostPath = this.deps.paths.toWindows(containerPath, anchor)
-    // the shipped seam keys off targetKey (write guards, web file API, contains); path/hostPath are ride-alongs
     return {
       path: containerPath,
       targetKey: FsTargetKey(containerPath),
@@ -142,7 +137,6 @@ export class DockerFileSystem extends FileSystem {
     return mapped
   }
 
-  // absence reads as undefined, not FS_NOT_FOUND: shipped consumers branch on undefined and record the absence themselves
   async stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> {
     checkSignal(signal)
     const host = this.hostOf(target)
@@ -160,7 +154,6 @@ export class DockerFileSystem extends FileSystem {
     return this.stat(this.targetFor(path, options?.cwd), signal ?? options?.signal)
   }
 
-  // shipped callers pass (target, signal); the older (target, options, signal) shape is still accepted
   async listDir(
     target: FsTarget,
     optionsOrSignal?: { maxEntries?: number } | AbortSignal,
@@ -181,7 +174,6 @@ export class DockerFileSystem extends FileSystem {
     }
     const limit = options?.maxEntries ?? Number.POSITIVE_INFINITY
     const visible = dirents.slice(0, limit)
-    // lstat gives types: the seam reports the link, not the symlink target; stats batched to avoid per-entry round trips
     const stats: (FileStat | undefined)[] = []
     for (let start = 0; start < visible.length; start += STAT_BATCH) {
       checkSignal(signal)
@@ -206,7 +198,6 @@ export class DockerFileSystem extends FileSystem {
     })
   }
 
-  // cap applied while reading, not after: a bounded read of a large file must not allocate the whole file first
   private async readCapped(host: string, maxBytes: number): Promise<{ bytes: Buffer; truncated: boolean }> {
     if (maxBytes <= 0) {
       const bytes = await readFile(host)
@@ -214,7 +205,6 @@ export class DockerFileSystem extends FileSystem {
     }
     const handle = await open(host, "r")
     try {
-      // one byte more than the cap: tells a truncated read apart from a file ending exactly at the limit
       const buffer = Buffer.alloc(maxBytes + 1)
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
       return { bytes: buffer.subarray(0, Math.min(bytesRead, maxBytes)), truncated: bytesRead > maxBytes }
@@ -254,7 +244,6 @@ export class DockerFileSystem extends FileSystem {
     return { maxBytes: optionsOrSignal?.maxBytes ?? 0, signal: maybeSignal }
   }
 
-  // the seam returns a bare string; version and truncation facts stay internal in readRaw for the write/edit guards
   async readText(target: FsTarget, optionsOrSignal?: { maxBytes?: number } | AbortSignal, maybeSignal?: AbortSignal): Promise<string> {
     const { maxBytes, signal } = DockerFileSystem.readArgs(optionsOrSignal, maybeSignal)
     const raw = await this.readRaw(target, maxBytes, signal)
@@ -269,11 +258,9 @@ export class DockerFileSystem extends FileSystem {
     let maxBytes = 0
     let signal: AbortSignal | undefined
     if (signalOrOptions instanceof AbortSignal) {
-      // shipped shape: (target, signal, maxBytes)
       signal = signalOrOptions
       if (typeof maybeMaxBytesOrSignal === "number") maxBytes = maybeMaxBytesOrSignal
     } else if (signalOrOptions !== undefined) {
-      // older shape: (target, options, signal)
       maxBytes = signalOrOptions.maxBytes ?? 0
       if (maybeMaxBytesOrSignal instanceof AbortSignal) signal = maybeMaxBytesOrSignal
     }
@@ -281,7 +268,6 @@ export class DockerFileSystem extends FileSystem {
     return raw.bytes
   }
 
-  // fatal decoder + NUL sample match the local provider's binary/UTF-8 failures, so a streamed read fails where a whole-file read would
   override streamText(target: FsTarget, signal?: AbortSignal): Promise<AsyncIterable<string>> {
     return Promise.resolve(this.streamTextInner(target, signal))
   }
@@ -344,7 +330,6 @@ export class DockerFileSystem extends FileSystem {
     }
   }
 
-  // maps the seam's write intent onto the guard token; undefined/null writes unconditionally
   private guardToken(expected: FsWriteIntent | FsVersion | null | undefined): string {
     if (expected === null || expected === undefined) return "-"
     if (typeof expected === "string") return expected
@@ -377,13 +362,11 @@ export class DockerFileSystem extends FileSystem {
   }
 
   async writeText(target: FsTarget, content: string, expected?: FsWriteIntent | FsVersion | null, signal?: AbortSignal): Promise<FsWriteOutcome> {
-    // the write tool renders its diff card from before/after; capture a bounded before-image before mutating
     let before: string | null = null
     try {
       const previous = await this.readRaw(target, DIFF_BASIS_MAX_BYTES, signal)
       if (!previous.truncated) before = decodeText(previous.bytes, target)
     } catch {
-      // absent or unreadable: no diff basis, same as the local backend
     }
     const outcome = await this.writeRaw(target, content, this.guardToken(expected), signal)
     return {
@@ -402,10 +385,8 @@ export class DockerFileSystem extends FileSystem {
     if (guard !== undefined && guard !== null && current.version !== guard) {
       throw new FsError(`"${target.displayPath}" changed since it was read; re-read it before editing`, "FS_STALE_VERSION")
     }
-    // the seam hands down oldString/newString; accept the older oldText/newText spelling too
     const rawOld = edit.oldString ?? edit.oldText ?? ""
     const rawNew = edit.newString ?? edit.newText ?? ""
-    // the model reads (\n) but an autocrlf checkout holds \r\n on disk; adapt the edit's endings or multi-line edits miss
     const [oldText, newText] = endingsAdapted(text, rawOld, rawNew)
     const matches = text.split(oldText).length - 1
     if (matches === 0) {
@@ -419,7 +400,6 @@ export class DockerFileSystem extends FileSystem {
     }
     const next = edit.replaceAll === true
       ? text.split(oldText).join(newText)
-      // function replacement on purpose: a string one would expand $&, $1, $` in the new text and corrupt it
       : text.replace(oldText, () => newText)
     const outcome = await this.writeRaw(target, next, current.version ?? "-", signal)
     return {
@@ -451,7 +431,6 @@ export class DockerFileSystem extends FileSystem {
     } catch (error) {
       throw ioError("watch", target, error)
     }
-    // a watch error (file deleted under us) reads as one change: callers re-stat and handle absence anyway
     watcher.on("error", () => fire())
     const onAbort = (): void => {
       void close()
@@ -466,7 +445,6 @@ export class DockerFileSystem extends FileSystem {
     return close
   }
 
-  // the container boundary is the isolation; there is no same-world sandbox mode here
   override get sandboxMode(): string | undefined {
     return undefined
   }

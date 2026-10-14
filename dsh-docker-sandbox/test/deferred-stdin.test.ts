@@ -18,7 +18,6 @@ describe('DeferredStdin', () => {
   })
 
   it('reports backpressure past the cap and drains once attached', () => {
-    // provisioning can lag a caller streaming into stdin: past the cap must meet backpressure, not grow
     const deferred = new DeferredStdin()
     let accepted = true
     for (let i = 0; i < 40; i++) accepted = deferred.stream.write(Buffer.alloc(512 * 1024))
@@ -38,7 +37,6 @@ describe('DeferredStdin', () => {
     const deferred = new DeferredStdin()
     const child = new PassThrough({ highWaterMark: 8 })
     deferred.attach(child)
-    // nobody reads the child: its buffer fills and write() starts reporting false
     let accepted = true
     for (let i = 0; i < 20; i++) accepted = deferred.stream.write(Buffer.alloc(64 * 1024))
     expect(accepted).toBe(false)

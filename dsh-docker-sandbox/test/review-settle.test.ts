@@ -38,7 +38,6 @@ function runFor(
   return { run, disposed: () => disposed }
 }
 
-// regression: a finished review used to leave its child resident and the parent without the verdict
 describe('settleReviewRun', () => {
   it('hands the child verdict to an idle parent as a queued followup', async () => {
     const parent = fakeAgent('idle')

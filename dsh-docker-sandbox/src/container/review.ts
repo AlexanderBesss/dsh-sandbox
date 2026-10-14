@@ -3,17 +3,12 @@ import type { WorktreeEntry } from "./worktrees.ts"
 
 const REVIEW_MS = 30000
 
-// cap on the embedded diff; the reviewer can re-run git for the rest
 export const MAX_DIFF_CHARS = 120_000
 
 export interface SessionChanges {
-  // absent when the main checkout is detached (no fork point)
   base?: string
-  // git log --oneline of the session's commits; "" when none
   log: string
-  // git status --porcelain; "" when clean
   status: string
-  // diff against the fork point; tracked changes only
   diff: string
   truncated: boolean
 }
@@ -27,7 +22,6 @@ async function tryGit(git: CliRunner, args: string[], cwd: string, timeoutMs = R
   }
 }
 
-// merge-base of the session branch with the main checkout's HEAD; undefined when main is detached
 export async function forkPointFor(
   git: CliRunner,
   tree: Pick<WorktreeEntry, "worktreePath" | "mainWorkspace">,

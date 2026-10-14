@@ -1,4 +1,3 @@
-// every command runs in the initiating chat's own container: one chat's cd/commit/install cannot touch another chat's files
 
 import type { SandboxContext } from "../context.ts"
 import { ShellExecutor, type ShellExecSpec, type ShellProcess } from "@deepseek-ai/dsh-shell"
@@ -19,7 +18,6 @@ export interface ShellDeps {
   worktrees?: WorktreeManager
 }
 
-// the app's Pwsh tool feeds PowerShell text straight to this seam; the markers match only PowerShell syntax, never POSIX
 export function looksLikePowerShell(command: string): boolean {
   return (
     /\b(?:Get|Set|New|Test|Select|Remove|Add|Copy|Move|Invoke|Import|Export|Write|Read|Clear|ForEach|Where|Sort|Measure|Group|Format|Out|Push|Pop|ConvertFrom|ConvertTo|Compare|Tee)-[A-Z][A-Za-z]+/.test(command) ||
@@ -36,7 +34,6 @@ const POWERSHELL_REJECTION =
   "is /workspace, and host drives appear as /c/..., /f/..., ... (exit 127 is synthesized by the " +
   "sandbox, not by a command)."
 
-// shaped exactly like the real handle so the tool layer renders it as a completed 127 run
 function rejectedProcess(message: string, timeoutMs: number, details: Record<string, unknown>): unknown {
   const reader = (text: string) => ({
     readFrom: (fromByte: number) => ({ text: text.slice(fromByte), nextOffset: text.length, lossy: false }),
@@ -89,11 +86,8 @@ export class DockerShellExecutor extends ShellExecutor {
 
   private readonly shellArgvCache = new Map<string, string[]>()
 
-  // the target is stamped here: execute can run after the initiating agent's async chain has moved on
-  // the filled spec must be complete: shipped tools read timeoutMs back and the jobs registry rejects an undefined deadline
   resolve(spec: ShellExecSpec): ShellExecSpec {
     const config = this.deps.config
-    // the clamped deadline is what the result echoes back, so a capped budget is visible rather than silent
     const timeoutMs = Math.max(0, Math.min(spec.timeoutMs ?? config.timeoutMs.get(), config.maxTimeoutMs.get()))
     const filled = {
       ...spec,
@@ -101,7 +95,6 @@ export class DockerShellExecutor extends ShellExecutor {
       onExpiry: spec.onExpiry ?? "kill",
       maxOutputBytes: spec.maxOutputBytes ?? config.maxOutputBytes.get(),
     }
-    // a stamped spec carries its own target; re-resolving would re-route it to the shared container or fail it agentlessly
     if (typeof spec.sandboxSession === "string" && spec.sandboxSession !== ""
       && typeof spec.container === "string" && spec.container !== "") {
       const workspace = typeof spec.sandboxWorkspace === "string" && spec.sandboxWorkspace !== ""
@@ -111,7 +104,6 @@ export class DockerShellExecutor extends ShellExecutor {
       return { ...filled, cwd: requested ?? this.deps.paths.containerRoot(workspace) }
     }
     const session = resolveTarget(this.ctx, this.deps.config, this.deps.worktrees)
-    // shipped shell tools name the directory workdir; cwd is kept for direct callers
     const requested = spec.workdir ?? spec.cwd
     const cwd = requested === undefined
       ? this.deps.paths.containerRoot(session.workspace)
@@ -144,7 +136,6 @@ export class DockerShellExecutor extends ShellExecutor {
       shared: resolved.sandboxShared === true,
     }
     const timeoutMs = Math.max(0, Math.min(resolved.timeoutMs ?? config.timeoutMs.get(), config.maxTimeoutMs.get()))
-    // guard before provisioning: a PowerShell command could never run in this container
     if (config.pwshGuard && looksLikePowerShell(String(resolved.command ?? ""))) {
       return rejectedProcess(POWERSHELL_REJECTION, timeoutMs, {
         container: target.container,
@@ -175,7 +166,6 @@ export class DockerShellExecutor extends ShellExecutor {
     let timedOut = false
     let aborted = false
     let providerFailure: { error: unknown; note: string } | undefined
-    // one cursor per stream: stdout and stderr are independent byte streams, so a shared cursor re-emits the other's output
     let stdoutOffset = 0
     let stderrOffset = 0
 
@@ -187,7 +177,6 @@ export class DockerShellExecutor extends ShellExecutor {
       : undefined
     if (timer) timer.unref?.()
 
-    // the shipped job-output pump reads observed.stderr: a provider failure rides that stream, like the local executor
     const observedStderr = {
       readFrom: (fromByte: number) => {
         if (providerFailure !== undefined) {
@@ -219,7 +208,6 @@ export class DockerShellExecutor extends ShellExecutor {
         stdout: handle.collected.stdout ?? { readFrom: (fromByte: number) => ({ text: "", nextOffset: fromByte, lossy: false }) },
         stderr: observedStderr,
       },
-      // never rejects: a launch failure becomes a killed status with the note on observed.stderr, re-thrown by result()
       done: Promise.resolve().then(() => handle.done).then(
         (outcome) => {
           if (timer) clearTimeout(timer)
@@ -261,7 +249,6 @@ export class DockerShellExecutor extends ShellExecutor {
         return {
           exitCode: proc.exitCode,
           signal: proc.signal,
-          // always booleans: the shell tools copy these onto the tool result, and a nested undefined fails its lossless-JSON check
           timedOut,
           aborted,
           timeoutMs,
@@ -279,7 +266,6 @@ export class DockerShellExecutor extends ShellExecutor {
       },
     }
 
-    // A background handle nobody awaits must not become an unhandled rejection.
     proc.done.catch(() => undefined)
 
     if (resolved.signal) {
@@ -292,7 +278,6 @@ export class DockerShellExecutor extends ShellExecutor {
     return proc as unknown as ShellProcess
   }
 
-  // Debian images ship dash as /bin/sh, which fails ordinary bash syntax; probe for bash once per container and cache
   private async shellArgvFor(target: SandboxTarget): Promise<string[]> {
     const cached = this.shellArgvCache.get(target.container)
     if (cached !== undefined) return cached
@@ -307,7 +292,6 @@ export class DockerShellExecutor extends ShellExecutor {
       ])
       if (probe.stdout.toString().trim() === "yes") argv = ["/bin/bash", "-lc"]
     } catch {
-      // a failed probe keeps the configured argv; the command itself reports any real problem
     }
     this.shellArgvCache.set(target.container, argv)
     return argv

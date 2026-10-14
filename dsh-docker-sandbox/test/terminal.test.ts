@@ -43,12 +43,10 @@ function makeBackend(live: FakeLive): { backend: ReturnType<typeof createShellBa
     beginWork: () => () => undefined,
     touch: () => undefined,
   } as unknown as Provisioner
-  // no initiating agent: this is what the terminal panel looks like to the plugin
   const ctx = {
     agents: { currentInitiator: () => undefined },
     sessions: { get: (id: string) => ({ id, header: { cwd: WORKSPACE } }) },
   } as unknown as SandboxContext
-  // short grace: the fake live process never exits, so the default 3 s would slow every test down
   const config = testConfig({ graceMs: 50 })
   const backend = createShellBackend(ctx, {
     transport,
@@ -97,7 +95,6 @@ describe('shell terminal backend', () => {
     expect((await first.done).waitReason).toBe('timeout')
 
     const second = session.startSend({ text: 'echo hi' })
-    // the stale verdict arrives late: it must not settle the new send or appear in its viewport
     live.child.stdout.write('__DSH_DONE_1__ 0\n')
     live.child.stdout.write('hi\n')
     live.child.stdout.write('\n__DSH_DONE_2__ 0\n')
@@ -109,7 +106,6 @@ describe('shell terminal backend', () => {
   })
 
   it('does not let a stale abort settle the send that runs next', async () => {
-    // the first send finished on its marker; a late abort (caller cleanup) must not settle the second
     const live = fakeLive()
     const { backend } = makeBackend(live)
     const session = await backend.spawn({ sessionId: SESSION, owner: 'ui', type: 'shell' })
@@ -129,7 +125,6 @@ describe('shell terminal backend', () => {
   })
 
   it('signals the session shell process group when closing', async () => {
-    // killing the local docker client does not stop the in-container command: close signals the recorded group
     const live = fakeLive()
     const { backend, execed } = makeBackend(live)
     const session = await backend.spawn({ sessionId: SESSION, owner: 'ui', type: 'shell' })
@@ -139,7 +134,6 @@ describe('shell terminal backend', () => {
   })
 
   it('escalates a close to KILL when the session shell ignores TERM', async () => {
-    // the fake never exits, standing in for a SIGTERM-ignoring command: close must escalate after graceMs
     const live = fakeLive()
     const { backend, execed } = makeBackend(live)
     const session = await backend.spawn({ sessionId: SESSION, owner: 'ui', type: 'shell' })
@@ -150,7 +144,6 @@ describe('shell terminal backend', () => {
   })
 
   it('keeps the completion sentinel out of the transcript the panel reads back', async () => {
-    // the marker is protocol, not output: it must not appear in `read()` either
     const live = fakeLive()
     const { backend } = makeBackend(live)
     const session = await backend.spawn({ sessionId: SESSION, owner: 'ui', type: 'shell' })
@@ -175,7 +168,6 @@ describe('shell terminal backend', () => {
 
     const killArgv = execed.find((argv) => argv.join(' ').includes('kill -INT'))
     expect(killArgv, 'signal must reach the recorded process group').toBeDefined()
-    // the session lives on after a signal: its next signal and its close still need the pidfile
     expect(killArgv!.join(' ')).not.toContain('rm -f')
     await session.close('done')
   })

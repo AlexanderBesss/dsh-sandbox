@@ -1,5 +1,3 @@
-/** Minimal stand-in for `@deepseek-ai/dsh-shell` (see vitest.config.ts). */
-
 export class ShellError extends Error {
   constructor(
     message: string,

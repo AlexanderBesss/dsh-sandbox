@@ -44,7 +44,6 @@ describe('createEngineGate', () => {
   it('reads the worktree toggle live, per step', async () => {
     let on = false
     const config = testConfig()
-    // the runtime wraps the volatile toggle in a reference; flip it as the plugin manager would
     ;(config.worktree as unknown as { get(): boolean }).get = () => on
     const gate = createEngineGate(fakeProvisioner({ reachable: false }), config)
     expect(await gate(payload, enter)).toEqual({ kind: 'enter', messages: [] })

@@ -1,4 +1,3 @@
-// created lazily and synchronously: the fs seam resolves without awaiting, so the tree must exist before first use
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SandboxConfig } from "../config.ts"
@@ -18,9 +17,7 @@ export interface WorktreeEntry {
   branch: string
   renamedFrom?: string
   createdAt: number
-  // the .git file holds a Windows path the container can't resolve; the provisioner exports GIT_DIR from this
   hostGitDir: string
-  // Git for Windows keeps autocrlf/identity in a config the container can't see; without the mirror, phantom CRLF diffs
   gitConfig: Record<string, string>
 }
 
@@ -84,12 +81,10 @@ export class WorktreeManager {
 
   constructor(private readonly deps: WorktreeDeps) {}
 
-  // re-read live: the plugin manager can flip the toggle without a restart
   get enabled(): boolean {
     return this.deps.config.worktree.get()
   }
 
-  // a subagent aliases onto its parent's tree: a fresh worktree from HEAD would hide the parent's uncommitted work
   ensure(sessionId: string, workspace: string, parentSessionId?: string): WorktreeEntry | undefined {
     if (!this.enabled) return undefined
     const cached = this.entries.get(sessionId)
@@ -181,14 +176,12 @@ export class WorktreeManager {
     let nameNote: string | undefined
     let renamedFrom: string | undefined
 
-    // stage first: the diff the naming pass reads has to be the diff that ships
     await this.deps.git.run(["add", "-A"], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
     const staged = await this.prFacts(sessionId, entry, title)
     const answered = await this.briefFor(sessionId, staged)
     if (answered.error !== undefined) briefError = answered.error
     const brief = answered.brief
 
-    // the naming pass works in this same worktree, so re-stage and re-read: the commit and description match what ships
     await this.deps.git.run(["add", "-A"], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
     const status = await this.deps.git.run(["status", "--porcelain"], { cwd: entry.worktreePath, timeoutMs: QUICK_MS })
     const stat = await this.tryGit(
@@ -209,7 +202,6 @@ export class WorktreeManager {
     if (renamed.from !== undefined) renamedFrom = renamed.from
     if (renamed.note !== undefined) nameNote = renamed.note
 
-    // must run before the push: with no fork point the log is HEAD --not --remotes, which a pushed branch hides from itself
     const log = await this.branchLog(entry, staged.base)
 
     const remoteResult = await this.tryGit(["remote", "get-url", "origin"], entry.repoRoot)
@@ -251,7 +243,6 @@ export class WorktreeManager {
           ], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
           prUrl = /https?:\/\/\S+/.exec(opened.stdout)?.[0]
         } catch (error) {
-          // the branch is pushed either way — report what the CLI answered, never fall back silently
           prError = error instanceof CliCommandError ? error.detail ?? error.message : String(error)
           compareUrl = compareUrlFor(remote, entry.branch)
         }
@@ -280,7 +271,6 @@ export class WorktreeManager {
     return `dsh-sbx: ${named}`.slice(0, 72)
   }
 
-  // never throws: the work is already staged, so a child that cannot answer costs the naming, never the request
   private async briefFor(
     sessionId: string,
     facts: PullRequestFacts,
@@ -296,7 +286,6 @@ export class WorktreeManager {
     }
   }
 
-  // safe only before the push: a pushed name is public and stays; the worktree dir keeps its name either way
   private applyBriefName(
     sessionId: string,
     entry: WorktreeEntry,
@@ -326,15 +315,13 @@ export class WorktreeManager {
 
   private isPushed(entry: WorktreeEntry): boolean {
     try {
-      // for-each-ref has no --quiet: an unsupported option exits 129 and would read as "already public" forever
-      // only the local remote-tracking ref is consulted: pushes here go through the shared `.git`, which updates it
       const refs = this.deps.git.runSync(
         ["for-each-ref", "--count=1", `refs/remotes/origin/${entry.branch}`],
         { cwd: entry.repoRoot, timeoutMs: QUICK_MS },
       )
       return refs.stdout.trim() !== ""
     } catch {
-      return true // cannot tell: treat the name as public and leave it alone
+      return true 
     }
   }
 
@@ -367,13 +354,11 @@ export class WorktreeManager {
       ...(base === undefined ? {} : { base: base.slice(0, 12) }),
       log,
       stat: stat?.stdout.trim() ?? "",
-      // the naming pass reads these facts before the commit exists; the caller sets this once it has happened
       committed: false,
       ...(named === "" ? {} : { title: named }),
     }
   }
 
-  // only clean, already-merged worktrees are removed; dirty or unmerged work persists until merged or deleted by hand
   async pruneForArchived(archived: ReadonlySet<string>): Promise<string[]> {
     if (!this.enabled || archived.size === 0) return []
     for (const repoRoot of [...this.repoRoots]) this.loadRegistry(repoRoot)
@@ -405,7 +390,6 @@ export class WorktreeManager {
       this.repoRoots.add(out)
       return out
     } catch (error) {
-      // a missing git binary must reach the caller; a plain non-zero exit just means "not a git checkout"
       if (error instanceof CliCommandError && error.code === "GIT_MISSING") throw error
       return undefined
     }
@@ -431,7 +415,6 @@ export class WorktreeManager {
       worktreePath,
       branch: `${this.deps.config.worktreeBranchPrefix}${slug}`,
       createdAt: Date.now(),
-      // filled once `worktree add` has made the gitdir real
       hostGitDir: this.gitDirFor({ worktreePath, repoRoot }),
       gitConfig: this.hostGitConfig(repoRoot),
     }
@@ -456,7 +439,6 @@ export class WorktreeManager {
     return `${entry.repoRoot.replace(/[\\/]+$/, "")}/.git/worktrees/${leaf}`
   }
 
-  // without the mount, container git can't follow the .git file's Windows path, and gitdir probes hit the mount boundary
   private registerMount(entry: WorktreeEntry): void {
     const gitHost = `${entry.repoRoot.replace(/[\\/]+$/, "")}/.git`
     this.deps.paths.registerExtraMount(entry.worktreePath, {
@@ -479,7 +461,6 @@ export class WorktreeManager {
     return config
   }
 
-  // re-attaches a recorded worktree whose directory was deleted by hand
   private verify(entry: WorktreeEntry): WorktreeEntry {
     if (!existsSync(entry.worktreePath)) this.addWorktree(entry)
     if (entry.hostGitDir === "") entry.hostGitDir = this.gitDirFor(entry)
@@ -497,7 +478,6 @@ export class WorktreeManager {
     } catch {
       branchExists = false
     }
-    // an existing branch is checked out as-is: `add -B` would reset the pointer to HEAD and strand the session's commits
     const add = (): void => {
       if (branchExists) this.deps.git.runSync(["worktree", "add", entry.worktreePath, entry.branch], { cwd: entry.repoRoot, timeoutMs: ADD_MS })
       else this.deps.git.runSync(["worktree", "add", "-B", entry.branch, entry.worktreePath, "HEAD"], { cwd: entry.repoRoot, timeoutMs: ADD_MS })
@@ -505,7 +485,6 @@ export class WorktreeManager {
     try {
       add()
     } catch (first) {
-      // a stale registration (directory deleted by hand) blocks the add until `prune` clears it; retry once, then report the original failure
       try {
         this.deps.git.runSync(["worktree", "prune"], { cwd: entry.repoRoot, timeoutMs: QUICK_MS })
         add()
@@ -525,7 +504,6 @@ export class WorktreeManager {
       }
       for (const [sessionId, entry] of Object.entries(raw.entries ?? {})) {
         if (!this.entries.has(sessionId)) {
-          // entries predating hostGitDir: git derives the gitdir name from the worktree directory's leaf
           if (typeof entry.hostGitDir !== "string" || entry.hostGitDir === "") {
             entry.hostGitDir = this.gitDirFor(entry)
           }

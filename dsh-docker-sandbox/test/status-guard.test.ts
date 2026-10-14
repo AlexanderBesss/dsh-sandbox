@@ -8,7 +8,6 @@ function request(headers: Record<string, string>): IncomingMessage {
 
 const HOST = '127.0.0.1:19387'
 
-// the app renderer's POSTs are bridged here carrying the dsh-app: origin (or none); cross-site must be refused
 describe('sameOrigin', () => {
   it('accepts the app renderer bridged from the dsh-app scheme', () => {
     expect(sameOrigin(request({ host: HOST, origin: 'dsh-app://app' }))).toBe(true)

@@ -1,5 +1,3 @@
-// a worktree has no node_modules (gitignored) and the host's carry Windows binaries a Linux container cannot load
-// never install into a shared checkout: it would replace the host's node_modules with Linux binaries
 
 import { existsSync } from "node:fs"
 import { join } from "node:path"
@@ -20,7 +18,6 @@ export interface WarmInstallDeps {
 
 export function installCommandFor(workspace: string): string | undefined {
   if (existsSync(join(workspace, "package-lock.json"))) return "npm ci --prefer-offline"
-  // pnpm/bun/yarn are not in the sandbox image; a session that wants one can run it itself
   return undefined
 }
 

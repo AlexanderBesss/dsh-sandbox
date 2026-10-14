@@ -51,7 +51,6 @@ const ghAnswering = (url: string, calls?: string[][]) => ({
   },
 })
 
-// the unit suite's fake CLI answers any argv: this pins argument shapes and rename-before-push against real git
 describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => {
   it('renames the branch before pushing it, and describes the change', async () => {
     const { origin, repo } = seededRepo()
@@ -89,7 +88,6 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
     expect(git(repo, 'branch', '--format=%(refname:short)')).not.toContain(created)
     expect(git(origin, 'branch')).toContain(result.branch!)
     expect(git(origin, 'branch')).not.toContain(created)
-    // the directory must not move on rename: the container has it mounted
     expect(git(result.worktreePath, 'branch', '--show-current')).toBe(result.branch)
     expect(git(repo, 'worktree', 'list')).toContain(entry!.worktreePath.replace(/\\/g, '/'))
 
@@ -119,7 +117,6 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
     const first = await manager.mergeRequest('session-3', repo)
     expect(first.renamedFrom).toBeDefined()
     writeFileSync(join(first.worktreePath, 'more.ts'), 'export const more = 1\n')
-    // second click: the branch is on origin now, so its name is public
     const second = await manager.mergeRequest('session-3', repo)
     expect(second.branch).toBe(first.branch)
     expect(second.renamedFrom).toBeUndefined()
@@ -130,7 +127,6 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
   it('commits what the naming pass itself wrote into the worktree', async () => {
     const { repo } = seededRepo()
 
-    // stands in for a child that "helps": it edits after the first staging, so the button stages again
     const brief = async (_sessionId: string, facts: PullRequestFacts) => {
       writeFileSync(join(facts.worktreePath, 'late.ts'), 'export const late = 1\n')
       return { brief: { bullets: ['- a change'] } }

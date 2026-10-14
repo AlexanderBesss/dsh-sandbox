@@ -35,11 +35,8 @@ const fakeGit = (diff = 'diff --git a/x b/x\n+x'): CliRunner => ({
 interface Answer {
   text?: string
   stopReason?: string
-  /** Resolve `result` never: the child hangs and the budget has to cut it off. */
   never?: boolean
-  /** Fail `start` (the provider refuses the delegation). */
   startThrows?: string
-  /** Resolve `start` only after `ms`: a wedged service the budget must cut off. */
   startLate?: number
 }
 
@@ -167,8 +164,6 @@ describe('buildBriefPrompt', () => {
   })
 
   it('keeps the child out of the worktree it is describing', () => {
-    // The button commits and pushes the moment the child answers, so an edit it
-    // makes would be left out of the very change it named.
     const prompt = buildBriefPrompt(facts(), '')
     expect(prompt).toContain('Do not modify anything')
     expect(prompt).toContain('the diff above is the whole')
@@ -272,7 +267,6 @@ describe('createPrBrief', () => {
     expect(outcome).toEqual({ error: expect.stringContaining('could not be started within 20 ms') })
     expect(disposed()).toBe(0)
     await new Promise((resolve) => setTimeout(resolve, 150))
-    // A child that arrives after the budget is still nobody's to leave resident.
     expect(disposed()).toBe(1)
   })
 })
