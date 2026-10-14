@@ -1,3 +1,5 @@
+import { join } from "node:path"
+import { homedir } from "node:os"
 import Schema from "@deepseek-ai/schemastery"
 
 /**
@@ -150,6 +152,32 @@ export const Config = Schema.object({
    * `*`, `[`, and no trailing `/` or `.`.
    */
   worktreeBranchPrefix: Schema.string().default("dsh-sbx/"),
+
+  /**
+   * Host directory bind-mounted at `/root/.npm` in every sandbox container:
+   * the npm cache shared by all chats. The cache is platform-neutral tarballs,
+   * so one directory serves every session (and survives container GC); each
+   * session still gets its own correct Linux `node_modules`. Empty disables
+   * the mount. The target path assumes the image runs npm as root (the `node`
+   * images do).
+   */
+  npmCacheHost: Schema.string().default(join(homedir(), ".dsh-docker-sandbox", "npm-cache")),
+
+  /**
+   * Worktree mode: after a session's container is up, install its
+   * dependencies in the container (`npm ci --prefer-offline`) when the
+   * worktree has a `package-lock.json` but no `node_modules` — a fresh
+   * worktree never has one, and the host's tree is Windows-flavored and
+   * useless to a Linux container. The install is background work: the chat
+   * is not blocked on it, and a failure only logs (the agent can still
+   * install by hand). Gated to worktree sessions on purpose: installing into
+   * a *shared* checkout would replace the host's own `node_modules` with
+   * Linux binaries.
+   */
+  worktreeInstall: Schema.boolean().default(true).volatile(),
+
+  /** Budget for the background worktree install above. */
+  warmInstallTimeoutMs: Schema.number().min(1000).default(600000),
 
   /**
    * The host git CLI invocation, used for worktree bookkeeping (the workspace

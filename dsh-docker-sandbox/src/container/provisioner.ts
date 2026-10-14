@@ -18,6 +18,7 @@
  * @module dsh-docker-sandbox/container/provisioner
  */
 
+import { mkdirSync } from "node:fs"
 import { BootstrapLogger, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
 import type { SandboxConfig } from "../config.ts"
 import { PathMapper, type SandboxMount } from "./paths.ts"
@@ -76,6 +77,13 @@ export interface ProvisionerHooks {
    * leave an unowned box behind for the TTL to clean up.
    */
   isSessionArchived?(sessionId: string): boolean
+  /**
+   * A conversation's container just became usable — created or re-attached,
+   * bootstrap done, once per container per process. Owners of follow-on work
+   * (the worktree warm install) kick it here. Fire-and-forget: the
+   * provisioner never awaits the answer.
+   */
+  onContainerReady?(target: SandboxTarget): void
 }
 
 /** Fold a mount into one `docker run -v` argument. */
@@ -140,6 +148,14 @@ export class Provisioner {
       "-w",
       this.paths.containerRoot(target.workspace),
     ]
+
+    // One shared npm cache for every sandbox container. The cache is
+    // platform-neutral tarballs, so sharing it is safe across chats and
+    // across the host/container boundary, and it outlives the container
+    // (whose writable layer — and default cache — dies with it).
+    if (this.config.npmCacheHost !== "") {
+      args.push("-v", volumeArg({ hostPath: this.config.npmCacheHost, containerPath: "/root/.npm" }))
+    }
 
     // A worktree session's gitdir lives in the main repo's `.git` (mounted
     // above at its drive form). `GIT_DIR`/`GIT_WORK_TREE` stop git from
@@ -290,6 +306,18 @@ export class Provisioner {
       // Exists but not Running: crashed entrypoint, manual stop, or an engine
       // restart that left it Exited. Recreate it fresh.
       await this.remove(target)
+    }
+
+    // Docker would create a missing volume source itself, but as a VM-side
+    // path; making the host directory first keeps the shared cache a real
+    // host directory the user can inspect and clear.
+    if (this.config.npmCacheHost !== "") {
+      try {
+        mkdirSync(this.config.npmCacheHost, { recursive: true })
+      } catch {
+        // A read-only home or a race: `docker run` still answers, and the
+        // cache is an optimization, not a correctness requirement.
+      }
     }
 
     try {
@@ -444,6 +472,10 @@ export class Provisioner {
     }
 
     if (entry) entry.bootstrapped = true
+    // The container is now usable for this chat: kick follow-on work (the
+    // worktree warm install). Once per container per process — the guard
+    // above is what makes that true.
+    this.hooks.onContainerReady?.(target)
   }
 
   /**

@@ -146,6 +146,9 @@ from `package.json` bundles plus `cordis.patch.yml`.
 | `worktree` | `false` | give every conversation its own `git worktree` and branch (see below); live toggle |
 | `worktreeRoot` | `""` | where worktrees live; empty = a sibling `<repoRoot>.worktrees/` per checkout, a set path is a root with one subdirectory per repo |
 | `worktreeBranchPrefix` | `dsh-sbx/` | branch namespace for the per-session worktrees |
+| `npmCacheHost` | `~/.dsh-docker-sandbox/npm-cache` | host dir shared as the containers' npm cache (mounted at `/root/.npm`); empty disables it |
+| `worktreeInstall` | `true` | run `npm ci --prefer-offline` in a worktree session's container when its worktree has a lockfile but no `node_modules`; live toggle |
+| `warmInstallTimeoutMs` | `600000` | budget for that background install |
 | `gitArgv` | `["git"]` | the host git CLI used for worktree bookkeeping |
 | `ghArgv` | `["gh"]` | the GitHub CLI used by the merge-request button |
 
@@ -177,6 +180,20 @@ F:\Projects\app.worktrees\session-3   (branch dsh-sbx/session-3)
   container git reads a CRLF checkout as phantom-modified). `git status`,
   commits, and the merge button all work in the sandbox, and tools that probe
   git internals map to those mounts instead of hitting the mount boundary.
+- **Dependencies install in the container, in the background.** A fresh
+  worktree has no `node_modules` (it is gitignored, and `git worktree add`
+  checks out tracked files only), and the main checkout's tree is no use to a
+  Linux container — it carries Windows binaries (`@rolldown/binding-win32-x64-msvc`
+  on the host, `binding-linux-x64-gnu` in the container). So once a worktree
+  session's container is up, the plugin runs `npm ci --prefer-offline` in it
+  when the worktree has a `package-lock.json` and no `node_modules`
+  (`worktreeInstall`, off-the-clock: the chat answers while it runs, and the
+  container holds a work lease so the GC cannot reclaim it mid-install). Every
+  container shares one host npm cache (`npmCacheHost`, mounted at
+  `/root/.npm`), so the install pulls from tarballs already on disk instead of
+  re-downloading the graph per session. Only worktree sessions get this:
+  installing into a *shared* checkout would replace the host's own
+  `node_modules` with Linux binaries.
 - **Merge request button.** With a worktree, the session header gains a
   *merge request* button beside the container chip: it commits everything in
   the worktree, pushes the branch to `origin`, and opens a GitHub pull

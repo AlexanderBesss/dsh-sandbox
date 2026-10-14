@@ -370,3 +370,32 @@ describe('Provisioner.engineReachable', () => {
     expect(calls.filter((call) => call.args[0] === 'version')).toHaveLength(2)
   })
 })
+
+describe('Provisioner npm cache mount', () => {
+  it('mounts the shared cache at /root/.npm when configured', () => {
+    const { provisioner, target } = makeProvisioner({}, { npmCacheHost: 'F:\\cache\\npm' })
+    const args = provisioner.runArgs(target)
+    expect(args.some((a) => a === 'F:/cache/npm:/root/.npm')).toBe(true)
+    // The workspace mount stays the first pair.
+    expect(args[args.indexOf('-v') + 1]).toBe('F:/Projects/dsh-sandbox:/workspace')
+  })
+
+  it('omits the mount when npmCacheHost is empty', () => {
+    const { provisioner, target } = makeProvisioner()
+    expect(provisioner.runArgs(target).some((a) => a.includes('/root/.npm'))).toBe(false)
+  })
+})
+
+describe('Provisioner.onContainerReady', () => {
+  it('fires once per container per process', async () => {
+    const ready: string[] = []
+    const { provisioner, target } = makeProvisioner(
+      { state: undefined },
+      {},
+      { onContainerReady: (t) => ready.push(t.sessionId) },
+    )
+    await provisioner.ensure(target)
+    await provisioner.ensure(target)
+    expect(ready).toEqual(['session-3'])
+  })
+})
