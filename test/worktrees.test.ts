@@ -39,7 +39,14 @@ interface FakeCli {
   calls: string[][]
 }
 
-function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string, ghPrExists?: string): FakeCli {
+interface FakeGhOptions {
+  url?: string
+  fails?: string
+  createFails?: string
+  openPrUrl?: string
+}
+
+function fakeCli(options: FakeGitOptions, ghOptions?: FakeGhOptions): FakeCli {
   const calls: string[][] = []
   const ok = (stdout = ''): CliResult => ({ stdout, stderr: '', code: 0 })
   let mergingNow = options.merging === true
@@ -132,11 +139,12 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string, ghPr
     },
     run: async (args) => {
       calls.push(['gh', ...args])
-      if (ghPrExists !== undefined && args[0] === 'pr' && args[1] === 'create') {
-        throw new CliCommandError('gh pr create failed', 'GH_FAILED', ghPrExists)
+      if (ghOptions?.createFails !== undefined && args[0] === 'pr' && args[1] === 'create') {
+        throw new CliCommandError('gh pr create failed', 'GH_FAILED', ghOptions.createFails)
       }
-      if (ghFails !== undefined) throw new CliCommandError('gh pr create failed', 'GH_FAILED', ghFails)
-      return ok(`${ghUrl ?? 'https://github.com/o/r/pull/7'}\n`)
+      if (ghOptions?.fails !== undefined) throw new CliCommandError('gh pr create failed', 'GH_FAILED', ghOptions.fails)
+      if (args[0] === 'pr' && args[1] === 'list') return ok(`${ghOptions?.openPrUrl ?? ''}\n`)
+      return ok(`${ghOptions?.url ?? 'https://github.com/o/r/pull/7'}\n`)
     },
   }
   return { git, gh, calls }
@@ -454,8 +462,7 @@ describe('WorktreeManager.mergeRequest', () => {
     const repoRoot = tempRoot()
     const { git, gh } = fakeCli(
       { repoRoot, dirty: ' M a\n', remote: 'https://github.com/o/r.git' },
-      undefined,
-      'gh: not logged to github.com; run `gh auth login`',
+      { fails: 'gh: not logged to github.com; run `gh auth login`' },
     )
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
     const result = await manager.mergeRequest('session-3', repoRoot)
@@ -465,20 +472,39 @@ describe('WorktreeManager.mergeRequest', () => {
     expect(result.compareUrl).toBe('https://github.com/o/r/compare/dsh-sbx/session-3?expand=1')
   })
 
-  it('reads back the link when the pull request already exists', async () => {
+  it('reads back the link of a pull request that is still open', async () => {
     const repoRoot = tempRoot()
     const { git, gh, calls } = fakeCli(
       { repoRoot, dirty: ' M a\n', remote: 'https://github.com/o/r.git' },
-      'https://github.com/o/r/pull/9',
-      undefined,
-      'a pull request for branch "dsh-sbx/session-3" already exists',
+      {
+        createFails: 'a pull request for branch "dsh-sbx/session-3" already exists',
+        openPrUrl: 'https://github.com/o/r/pull/9',
+      },
     )
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
     const result = await manager.mergeRequest('session-3', repoRoot)
     expect(result.pushed).toBe(true)
     expect(result.prUrl).toBe('https://github.com/o/r/pull/9')
     expect(result.prError).toBeUndefined()
-    expect(calls).toContainEqual(['gh', 'pr', 'view', '--json', 'url', '-q', '.url'])
+    expect(calls).toContainEqual(['gh', 'pr', 'list', '--state', 'open', '--head', 'dsh-sbx/session-3', '--json', 'url', '-q', '.[0].url'])
+
+    const second = fakeCli({ repoRoot, branchExists: true })
+    const reopened = new WorktreeManager({ git: second.git, gh: second.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    expect((await reopened.info('session-3', repoRoot))?.prUrl).toBe('https://github.com/o/r/pull/9')
+  })
+
+  it('does not report a merged pull request as freshly opened', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh } = fakeCli(
+      { repoRoot, dirty: ' M a\n', remote: 'https://github.com/o/r.git' },
+      { createFails: 'a pull request for branch "dsh-sbx/session-3" already exists' },
+    )
+    const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(result.pushed).toBe(true)
+    expect(result.prUrl).toBeUndefined()
+    expect(result.prError).toMatch(/already exists/)
+    expect(result.compareUrl).toBe('https://github.com/o/r/compare/dsh-sbx/session-3?expand=1')
   })
 
   it('remembers the pull request link across a restart', async () => {

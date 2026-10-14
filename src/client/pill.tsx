@@ -35,7 +35,8 @@ interface Poller {
 }
 
 // One poll per session, shared by every header pill: each status call fans out
-// into several git invocations on the host, and four pills would quadruple it.
+// into several git invocations on the host, and one poll per pill would
+// multiply them.
 const pollers = new Map<string, Poller>()
 
 export function useSandboxStatus(sessionId: string): StatusSnapshot {
