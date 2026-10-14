@@ -97,8 +97,13 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
         ? "retry merge"
         : "merge request"
 
+  // A pushed branch with no pull request is not a success: the amber dot is
+  // what tells the user the merge request still needs them (or a GitHub CLI).
+  const opened = result?.prUrl !== undefined
   const dotColor = phase === "done"
-    ? "var(--dsw-alias-state-success-primary)"
+    ? opened || result?.prError === undefined
+      ? "var(--dsw-alias-state-success-primary)"
+      : "var(--dsw-alias-state-warn-primary)"
     : phase === "error"
       ? "var(--dsw-alias-state-error-primary)"
       : phase === "busy"
@@ -111,6 +116,10 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
     worktree.dirty ? "uncommitted changes will be committed\n" : "",
     worktree.unpushed ? "unpushed commits on the branch\n" : "",
     result?.prUrl === undefined ? "" : `pull request: ${result.prUrl}\n`,
+    result?.prError === undefined ? "" : `no pull request: ${result.prError}\n`,
+    result?.renamedFrom === undefined ? "" : `branch renamed from ${result.renamedFrom}\n`,
+    result?.nameNote === undefined ? "" : `${result.nameNote}\n`,
+    result?.briefError === undefined ? "" : `no AI naming pass: ${result.briefError}\n`,
     result?.compareUrl === undefined ? "" : `open the merge request by hand: ${result.compareUrl}\n`,
     error === undefined ? "" : `failed: ${error}\n`,
     phase === "done" && link !== undefined

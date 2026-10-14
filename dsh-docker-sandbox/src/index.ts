@@ -34,6 +34,8 @@ import { createCliRunner } from "./container/git.ts"
 import { createEngineGate } from "./container/engine-gate.ts"
 import { createWarmInstall } from "./container/warm-install.ts"
 import type { SandboxTarget } from "./container/session.ts"
+import { createPrBrief } from "./container/pr-brief.ts"
+import { createSessionTitleReader } from "./container/session-title.ts"
 import { type MountMode, PathMapper } from "./container/paths.ts"
 import { Provisioner } from "./container/provisioner.ts"
 import { registerStatusRoute } from "./status.ts"
@@ -81,14 +83,26 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
         ?.archivedSessionIds?.includes(sessionId) === true,
     onContainerReady: (target) => warmInstall(target),
   })
+  // Hoisted: the naming pass below closes over this, and the deferred inject
+  // further down is what fills it in.
+  let subagents: SubagentService | undefined
+  const git = createCliRunner(config.gitArgv, "git")
   // Worktree mode is read live (it is a volatile option), so the manager is
   // always built; `ensure` is a no-op while the toggle is off.
   const worktrees = new WorktreeManager({
-    git: createCliRunner(config.gitArgv, "git"),
+    git,
     gh: createCliRunner(config.ghArgv, "gh"),
     config,
     logger: ctx.logger,
     paths,
+    titleFor: createSessionTitleReader(ctx),
+    brief: createPrBrief({
+      subagents: () => subagents,
+      parentFor: (sessionId) => ctx.agents?.get?.(sessionId),
+      git,
+      config,
+      logger: ctx.logger,
+    }),
   })
   warmInstall = createWarmInstall({ transport, provisioner, worktrees, config, logger: ctx.logger })
 
@@ -109,9 +123,10 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     )
   })
   // Deferred: capture the subagent service when it becomes visible, so the
-  // review button can spawn a fresh reviewer. An absent or isolated service
-  // leaves the review route answering 503, and never blocks the seams.
-  let subagents: SubagentService | undefined
+  // review button can spawn a fresh reviewer and the merge button can ask for a
+  // pull-request summary. An absent or isolated service leaves the review route
+  // answering 503 and the description without its Summary section, and never
+  // blocks the seams.
   ctx.inject(["subagents"], (inner: Context) => {
     subagents = (inner as SandboxContext).subagents
   })

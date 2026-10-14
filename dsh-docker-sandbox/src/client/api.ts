@@ -43,6 +43,14 @@ export interface MergeRequestView {
   remote?: string
   prUrl?: string
   compareUrl?: string
+  /** Why no pull request was opened (gh missing, unauthenticated, …). */
+  prError?: string
+  /** The branch was renamed to this request's name before pushing. */
+  renamedFrom?: string
+  /** Why the branch kept its name when the naming pass proposed another. */
+  nameNote?: string
+  /** Why there was no naming pass (no subagent service, timeout, …). */
+  briefError?: string
 }
 
 /** What `/sandbox/api/review` returns. */

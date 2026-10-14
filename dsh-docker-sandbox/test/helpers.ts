@@ -54,6 +54,8 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     npmCacheHost: '',
     worktreeInstall: true,
     warmInstallTimeoutMs: 600000,
+    prBrief: true,
+    prBriefTimeoutMs: 120000,
     gitArgv: ['git'],
     ghArgv: ['gh'],
     ...overrides,
@@ -72,6 +74,7 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     worktree: ref(plain.worktree),
     worktreeRoot: ref(plain.worktreeRoot),
     worktreeInstall: ref(plain.worktreeInstall),
+    prBrief: ref(plain.prBrief),
     resourceLimits: {
       cpu: ref(plain.resourceLimits.cpu),
       memory: ref(plain.resourceLimits.memory),

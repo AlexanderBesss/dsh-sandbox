@@ -147,7 +147,10 @@ export const Config = Schema.object({
   worktreeRoot: Schema.string().default("").volatile(),
 
   /**
-   * Branch prefix for the per-session worktrees, e.g. `dsh-sbx/session-3`.
+   * Branch prefix for the per-session worktrees. The rest of the name is the
+   * conversation's title, slugified plus a short digest of its id, e.g.
+   * `dsh-sbx/fix-the-login-crash-1a2b3c` (or `dsh-sbx/session-3` when the app
+   * has no usable title for the chat).
    * Needs a valid git branch namespace: no spaces, `..`, `~`, `^`, `:`, `?`,
    * `*`, `[`, and no trailing `/` or `.`.
    */
@@ -178,6 +181,24 @@ export const Config = Schema.object({
 
   /** Budget for the background worktree install above. */
   warmInstallTimeoutMs: Schema.number().min(1000).default(600000),
+
+  /**
+   * Merge-request button: ask a fresh subagent to read the committed branch and
+   * answer for it — a branch name that says what the change is, a title, and the
+   * summary bullets that go on top of the pull-request description. The name is
+   * applied before the branch is pushed, so the remote only ever sees the
+   * readable one. The commits and diffstat stay in the description either way,
+   * and a child that cannot answer costs only the naming and the summary: the
+   * request still opens, and the button says why.
+   */
+  prBrief: Schema.boolean().default(true).volatile(),
+
+  /**
+   * One deadline for the whole naming pass — the prompt's git probes, the
+   * delegation, and the child's answer alike — after which the branch keeps its
+   * current name. The merge request blocks while the pass runs.
+   */
+  prBriefTimeoutMs: Schema.number().min(1000).default(120000),
 
   /**
    * The host git CLI invocation, used for worktree bookkeeping (the workspace

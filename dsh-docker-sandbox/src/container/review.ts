@@ -40,13 +40,39 @@ export interface SessionChanges {
 }
 
 /** Run one git call, swallowing failure (an absent answer, not an error). */
-async function tryGit(git: CliRunner, args: string[], cwd: string): Promise<string | undefined> {
+async function tryGit(git: CliRunner, args: string[], cwd: string, timeoutMs = REVIEW_MS): Promise<string | undefined> {
   try {
-    const out = await git.run(args, { cwd, timeoutMs: REVIEW_MS })
+    const out = await git.run(args, { cwd, timeoutMs })
     return out.stdout
   } catch {
     return undefined
   }
+}
+
+/**
+ * The commit a session branch forked from: merge-base of the session branch
+ * with whatever the main checkout has checked out.
+ *
+ * Shared by the review prompt and the pull-request description — both need to
+ * describe "what this conversation changed", and both are wrong without the
+ * same fork point. A detached main checkout yields `undefined`, and callers
+ * fall back to describing the branch against `HEAD`.
+ *
+ * @param git - the host git CLI runner.
+ * @param tree - the session worktree and the checkout it was carved from.
+ * @param timeoutMs - budget for each probe; the pull-request pass shrinks it to
+ *   the time its own deadline leaves.
+ * @returns the fork point sha, or undefined when it cannot be computed.
+ */
+export async function forkPointFor(
+  git: CliRunner,
+  tree: Pick<WorktreeEntry, "worktreePath" | "mainWorkspace">,
+  timeoutMs = REVIEW_MS,
+): Promise<string | undefined> {
+  const mainHead = await tryGit(git, ["symbolic-ref", "--short", "HEAD"], tree.mainWorkspace, timeoutMs)
+  if (mainHead === undefined || mainHead.trim() === "") return undefined
+  const merged = await tryGit(git, ["merge-base", "HEAD", mainHead.trim()], tree.worktreePath, timeoutMs)
+  return merged === undefined || merged.trim() === "" ? undefined : merged.trim()
 }
 
 /**
@@ -58,16 +84,7 @@ async function tryGit(git: CliRunner, args: string[], cwd: string): Promise<stri
  */
 export async function collectChanges(git: CliRunner, entry: WorktreeEntry): Promise<SessionChanges> {
   const cwd = entry.worktreePath
-
-  // Fork point: merge-base of the session branch with whatever the main
-  // checkout has checked out. A detached main checkout yields no base, and
-  // the fallbacks below describe the session's work instead.
-  let base: string | undefined
-  const mainHead = await tryGit(git, ["symbolic-ref", "--short", "HEAD"], entry.mainWorkspace)
-  if (mainHead !== undefined && mainHead.trim() !== "") {
-    const merged = await tryGit(git, ["merge-base", "HEAD", mainHead.trim()], cwd)
-    if (merged !== undefined && merged.trim() !== "") base = merged.trim()
-  }
+  const base = await forkPointFor(git, entry)
 
   const diffOut = await tryGit(git, base !== undefined ? ["diff", base] : ["diff", "HEAD"], cwd) ?? ""
   const logOut = await tryGit(

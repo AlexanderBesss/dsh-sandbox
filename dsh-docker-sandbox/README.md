@@ -145,12 +145,14 @@ from `package.json` bundles plus `cordis.patch.yml`.
 | `gcOnUnload` | `false` | delete every sandbox container when the plugin unloads |
 | `worktree` | `false` | give every conversation its own `git worktree` and branch (see below); live toggle |
 | `worktreeRoot` | `""` | where worktrees live; empty = a sibling `<repoRoot>.worktrees/` per checkout, a set path is a root with one subdirectory per repo |
-| `worktreeBranchPrefix` | `dsh-sbx/` | branch namespace for the per-session worktrees |
+| `worktreeBranchPrefix` | `dsh-sbx/` | branch namespace for the per-session worktrees; the rest of the name is the chat's title (see below) |
 | `npmCacheHost` | `~/.dsh-docker-sandbox/npm-cache` | host dir shared as the containers' npm cache (mounted at `/root/.npm`); empty disables it |
 | `worktreeInstall` | `true` | run `npm ci --prefer-offline` in a worktree session's container when its worktree has a lockfile but no `node_modules`; live toggle |
 | `warmInstallTimeoutMs` | `600000` | budget for that background install |
 | `gitArgv` | `["git"]` | the host git CLI used for worktree bookkeeping |
 | `ghArgv` | `["gh"]` | the GitHub CLI used by the merge-request button |
+| `prBrief` | `true` | let one fresh subagent name the branch and write the merge request's bullet points when the button is clicked; live toggle |
+| `prBriefTimeoutMs` | `120000` | one deadline for that whole pass — probes, delegation, and answer (minimum 1000). A pass that runs out costs only the naming and the summary |
 
 ## Worktree mode and merge requests
 
@@ -160,9 +162,9 @@ editing one file conflict exactly as they would in two terminals. With
 instead works in its own `git worktree`, on its own branch:
 
 ```
-chat "session-3"  ──▶  container dsh-sbx-session-3  ──▶  /workspace
-                        ⇅ bind mount
-F:\Projects\app.worktrees\session-3   (branch dsh-sbx/session-3)
+chat "Fix the login crash"  ──▶  container dsh-sbx-session-3  ──▶  /workspace
+                                  ⇅ bind mount
+F:\Projects\app.worktrees\fix-the-login-crash-1a2b3c   (branch dsh-sbx/fix-the-login-crash-1a2b3c)
 ```
 
 - **Per-chat isolation.** The container mounts the worktree, and the host file
@@ -170,6 +172,14 @@ F:\Projects\app.worktrees\session-3   (branch dsh-sbx/session-3)
   created lazily on the chat's first tool call (one `git worktree add`), and
   the session → worktree mapping is kept in a `registry.json` under the
   worktrees root, so it survives restarts.
+- **Branches are named after the conversation.** The branch (and the worktree
+  directory) takes the chat's title — the one the sidebar shows, or the first
+  message when the app has not titled the chat yet — slugified and cut to 40
+  characters, with a short digest of the session id so two chats titled alike
+  never share a branch: `dsh-sbx/fix-the-login-crash-1a2b3c`. A title chosen
+  after the first tool call does not rename an existing branch (it may already
+  be pushed); with no usable title — no latin characters to spell — the branch
+  keeps the session-slug form `dsh-sbx/session-3`.
 - **Git works inside the container too.** A linked worktree's `.git` file
   points at `<mainRepo>/.git/worktrees/<name>` — a host path the container
   cannot resolve on its own. So a worktree session's container also mounts the
@@ -195,11 +205,44 @@ F:\Projects\app.worktrees\session-3   (branch dsh-sbx/session-3)
   installing into a *shared* checkout would replace the host's own
   `node_modules` with Linux binaries.
 - **Merge request button.** With a worktree, the session header gains a
-  *merge request* button beside the container chip: it commits everything in
-  the worktree, pushes the branch to `origin`, and opens a GitHub pull
-  request through `gh`. Without `gh` installed it stops at the pushed branch
-  and reports the remote's compare URL. The PR contains only that
-  conversation's changes — its own branch diff.
+  *merge request* button beside the container chip. It stages everything in the
+  worktree and hands the staged diff to one fresh subagent, which answers in a
+  strict shape: a branch name, a request title, and bullet points. The child is
+  told to leave the worktree alone, and the button stages once more before it
+  commits, so anything written while the pass ran still ships. The button then
+  renames the branch to that name, commits with that title as the subject,
+  pushes to `origin`, and opens a GitHub pull request through `gh`. So the
+  branch a reviewer sees is `dsh-sbx/refuse-turn-when-engine-down-1a2b3c`, not
+  `dsh-sbx/session-3`, and the description says what the change does:
+
+  ```
+  Work from the sandboxed conversation **Also, when we create a branch** …
+
+  ## Summary
+
+  - The merge button names the branch from the staged diff, so `git branch`
+    reads as the change rather than the session id.
+  - A branch already on `origin` keeps its name; the tooltip says why.
+
+  ## Commits (1)
+
+      4f2c1d8 dsh-sbx: Refuse the turn when the engine is down
+
+  ## Files changed
+
+      src/container/worktrees.ts | 61 ++++++++++++++++++
+  ```
+
+  Bullets are the child's, clipped to eight, and a line that is really a diff
+  line (`- -old code`) is dropped rather than rendered. Renaming happens before
+  the push, which is what makes it safe: a branch that already reached a remote
+  keeps its name and the tooltip says so. `prBriefTimeoutMs` is one deadline for
+  the whole pass — the prompt's git probes, the delegation, and the child's
+  answer alike — since the button blocks while it runs. Without `gh` installed
+  (or logged in) the button stops at the pushed branch and reports the remote's
+  compare URL, along with why the request did not open. Set `prBrief: false` to
+  skip the naming pass entirely — branches then keep their creation name and the
+  description is the two git sections.
 - **Review button.** Beside it, a *review* button spawns a fresh subagent
   that reviews the conversation's changes — its own commits plus uncommitted
   and untracked edits, collected as a diff against the branch's fork point.
@@ -259,6 +302,19 @@ between host and container, and ripgrep availability. It is skipped unless
 - **`NAME_CONFLICT`** — a container this plugin does not own already carries
   the name `dsh-sbx-<session>`. Rename that container, or remove it if it is
   stale; the plugin will not adopt or delete a container it did not create.
+- **Merge button pushes the branch but opens no pull request** — the GitHub
+  CLI is what opens it. Without `gh` installed (or with it logged out) the
+  button commits and pushes, then reports the reason and the remote's compare
+  URL in its tooltip, and its dot stays amber rather than green. Install
+  GitHub CLI and run `gh auth login`, or point `ghArgv` at it.
+- **The branch kept its `dsh-sbx/session-…` name after clicking merge** — the
+  naming pass did not run, and the tooltip says which case it was: no subagent
+  service (the app has not finished wiring one), no live agent in the session to
+  delegate from, the child running out its `prBriefTimeoutMs`, or an answer that
+  was not bullet points. Any of those costs only the naming and the bullet
+  points; the commit, the push, and the git sections of the description still
+  happen. A branch that already reached `origin` also keeps its name — that name
+  is public, and renaming it would break whatever refers to it.
 - **`PowerShell is not available in this sandbox`** — the app's Pwsh tool hands
   PowerShell text to the shell seam, which here is a Linux container; the guard
   (`pwshGuard`, on by default) answers once with a redirect to the Bash tool

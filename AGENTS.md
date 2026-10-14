@@ -1,5 +1,17 @@
 # Agent instructions
 
+## Commits: only when asked
+
+Do not commit unless the user directly asks for it in the current request
+("commit this", "ship it", "make a commit", …). A request to fix, implement,
+or analyze something is *not* a request to commit: finish the change, leave
+the working tree modified, and report what changed — staging and committing
+are the user's call.
+
+- Never commit to "clean up" at the end of a task, and never amend or rebase
+  on your own initiative.
+- When the user does ask, the versioning rule below applies to that commit.
+
 ## Versioning: bump the version on every commit
 
 Every commit that changes a package's shipped code must bump that package's
@@ -13,6 +25,24 @@ The app's plugin manager shows the installed version, so the bump is how an
 installed copy is told apart from the source tree — an unchanged version means
 a stale install is invisible. After bumping, rebuild (`npm run build`) so the
 artifacts and the version ship together.
+
+## Comments: only when necessary
+
+Do not add a comment unless it carries something the code itself cannot carry.
+A reader who can name the thing from its identifier needs no prose.
+
+- No comment restating the code, narrating the steps, or introducing a block
+  ("as you can see", "first we validate…", section banners).
+- No comment recording that a change was made, for whom, or when — that is
+  what git history is for.
+- Do comment the *why* when it is not in the code: an invariant, a constraint
+  arriving from outside, a workaround, a hazard, an ordering rule. One or two
+  lines, next to the line that needs it.
+- Match the file's existing density. Where a file already documents its modules
+  and exported functions (this repo's style), keep that documentation and update
+  it with the change; do not add narration inside function bodies on top of it.
+- When a change makes a comment wrong, fix or delete the comment in the same
+  edit.
 
 ## TypeScript: no `any`
 

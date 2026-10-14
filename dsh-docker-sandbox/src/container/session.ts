@@ -79,6 +79,52 @@ export function sessionSlugFor(sessionId: string): string {
   return `${head}-${slugDigest(sessionId)}`
 }
 
+/** Longest readable part a conversation title contributes to a name. */
+const TITLE_SLUG_MAX = 40
+
+/**
+ * Turn human-readable text (a chat title, or its first message) into a ref-safe slug.
+ *
+ * Git refs rule out spaces, `~^:?*[`, `..`, `@{`, and a trailing `.lock`, so the
+ * slug keeps only `a-z0-9`: accents are folded off (`café` → `cafe`) and
+ * everything else — punctuation, emoji, non-latin script — becomes a separator.
+ * Text with nothing latin-alphanumeric in it yields `""`, which callers read as
+ * "no usable name" and answer with the session slug.
+ *
+ * @param text - the title, as the app or the first prompt states it.
+ * @returns the slug, possibly empty.
+ */
+export function titleSlugFor(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, TITLE_SLUG_MAX)
+    .replace(/-+$/g, "")
+}
+
+/**
+ * The branch (and worktree directory) name for one conversation.
+ *
+ * A readable name is what makes a branch recognizable in `git branch`, on the
+ * remote, and in a pull-request list, so the conversation's title drives it. The
+ * short digest of the session id rides along because two chats can carry the
+ * same title, and a branch name that names two conversations is worse than an
+ * ugly one. With no usable title — the app has not named the chat yet, or its
+ * title is not in latin script — the session slug is used, as before.
+ *
+ * @param title - the conversation title, when the app has one.
+ * @param sessionId - conversation identity, source of the uniqueness digest.
+ * @returns the slug carried after the branch prefix.
+ */
+export function branchSlugFor(title: string | undefined, sessionId: string): string {
+  const readable = title === undefined ? "" : titleSlugFor(title)
+  if (readable === "") return sessionSlugFor(sessionId)
+  return `${readable}-${slugDigest(sessionId).slice(0, 6)}`
+}
+
 /**
  * Derive the sandbox container name for one conversation.
  *

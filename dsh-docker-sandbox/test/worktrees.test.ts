@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliCommandError, type CliResult, type CliRunner } from '../src/container/git.ts'
 import { PathMapper } from '../src/container/paths.ts'
+import { slugDigest } from '../src/container/session.ts'
 import { WorktreeManager, compareUrlFor } from '../src/container/worktrees.ts'
 import { testConfig } from './helpers.ts'
 
@@ -35,6 +36,16 @@ interface FakeGitOptions {
   gitConfig?: Record<string, string>
   /** Fail every git call with GIT_MISSING (git not on PATH). */
   gitMissing?: boolean
+  /** What the main checkout has checked out (`symbolic-ref --short HEAD`). */
+  mainBranch?: string
+  /** Answer for `merge-base HEAD <mainBranch>` — the session branch's fork point. */
+  base?: string
+  /** Answer for `log --oneline …`. */
+  log?: string
+  /** Answer for `diff --stat …`. */
+  stat?: string
+  /** `for-each-ref refs/remotes/origin/…` prints a ref: the branch is public. */
+  pushedBranch?: boolean
 }
 
 interface FakeCli {
@@ -43,7 +54,7 @@ interface FakeCli {
   calls: string[][]
 }
 
-function fakeCli(options: FakeGitOptions, ghUrl?: string): FakeCli {
+function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): FakeCli {
   const calls: string[][] = []
   const ok = (stdout = ''): CliResult => ({ stdout, stderr: '', code: 0 })
   const handle = (args: string[]): CliResult => {
@@ -72,8 +83,21 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string): FakeCli {
       return ok(`${options.remote}\n`)
     }
     if (args[0] === 'merge-base') {
-      if (options.merged === true) return ok()
-      throw new CliCommandError('not an ancestor', 'GIT_FAILED', '')
+      if (args[1] === '--is-ancestor') {
+        if (options.merged === true) return ok()
+        throw new CliCommandError('not an ancestor', 'GIT_FAILED', '')
+      }
+      if (options.base === undefined) throw new CliCommandError('no merge base', 'GIT_FAILED', '')
+      return ok(`${options.base}\n`)
+    }
+    if (args[0] === 'symbolic-ref') return ok(options.mainBranch === undefined ? '' : `${options.mainBranch}\n`)
+    if (args[0] === 'log') return ok(`${options.log ?? ''}\n`)
+    if (args[0] === 'diff') return ok(`${options.stat ?? ''}\n`)
+    if (args[0] === 'for-each-ref') {
+      // Real git has no `--quiet` here and exits 129; the fake keeps that
+      // contract so an unsupported option cannot pass as "no such ref".
+      if (args[1] === '--quiet') throw new CliCommandError("unknown option `quiet'", 'GIT_FAILED', "error: unknown option `quiet'")
+      return ok(options.pushedBranch === true ? `refs/remotes/origin/${args[args.length - 1]}\n` : '')
     }
     if (args[0] === 'config' && args[1] === '--get') {
       const value = options.gitConfig?.[args[2]!]
@@ -93,10 +117,17 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string): FakeCli {
     },
     run: async (args) => {
       calls.push(['gh', ...args])
+      if (ghFails !== undefined) throw new CliCommandError('gh pr create failed', 'GH_FAILED', ghFails)
       return ok(`${ghUrl ?? 'https://github.com/o/r/pull/7'}\n`)
     },
   }
   return { git, gh, calls }
+}
+
+/** The `--body` the merge button handed `gh pr create`. */
+function createBody(calls: string[][]): string {
+  const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
+  return create[create.indexOf('--body') + 1]!
 }
 
 /** A throwaway directory to stand in for a repo root, cleaned after the test. */
@@ -125,6 +156,36 @@ describe('WorktreeManager.ensure', () => {
     expect(entry!.mainWorkspace).toBe(repoRoot)
     expect(calls).toContainEqual(['rev-parse', '--show-toplevel'])
     expect(calls).toContainEqual(['worktree', 'add', '-B', 'dsh-sbx/session-3', entry!.worktreePath, 'HEAD'])
+  })
+
+  it('names the branch after the conversation rather than its id', () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({ repoRoot })
+    const manager = new WorktreeManager({
+      git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'),
+      titleFor: () => 'Fix the login crash!',
+    })
+    const entry = manager.ensure('session-3', repoRoot)
+    const digest = slugDigest('session-3').slice(0, 6)
+    expect(entry!.branch).toBe(`dsh-sbx/fix-the-login-crash-${digest}`)
+    // The worktree directory carries the same readable name, and the digest keeps
+    // two chats titled alike (or one chat renamed later) off each other's branch.
+    expect(entry!.worktreePath).toBe(join(`${repoRoot}.worktrees`, `fix-the-login-crash-${digest}`))
+    expect(calls).toContainEqual(['worktree', 'add', '-B', entry!.branch, entry!.worktreePath, 'HEAD'])
+  })
+
+  it('keeps the session slug when the conversation has no usable name', () => {
+    // No title yet, an empty one, or one with nothing latin-alphanumeric in it:
+    // naming falls back to what it was, not to a branch called `dsh-sbx/-1a2b3c`.
+    for (const title of [undefined, '', '   ', '🎉 🚀']) {
+      const repoRoot = tempRoot()
+      const { git, gh } = fakeCli({ repoRoot })
+      const manager = new WorktreeManager({
+        git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'),
+        titleFor: () => title,
+      })
+      expect(manager.ensure('session-3', repoRoot)!.branch).toBe('dsh-sbx/session-3')
+    }
   })
 
   it('caches the entry, so later calls never touch git again', () => {
@@ -210,6 +271,162 @@ describe('WorktreeManager.mergeRequest', () => {
     expect(calls.some((call) => call[0] === 'gh' && call[1] === 'pr')).toBe(true)
   })
 
+  it('names the commit, the request, and its description after the conversation', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({
+      repoRoot,
+      dirty: ' M src/login.ts\n',
+      remote: 'git@github.com:o/r.git',
+      mainBranch: 'main',
+      base: 'deadbeefcafebabedeadbeefcafebabedeadbeef',
+      log: 'abc1234 fix the login crash\n5678def cover it with a test',
+      stat: ' src/login.ts | 12 ++++++++\n 1 file changed, 12 insertions(+)',
+    })
+    const manager = new WorktreeManager({
+      git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'),
+      titleFor: () => 'Fix the login crash',
+    })
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(result.prUrl).toBe('https://github.com/o/r/pull/7')
+    // The commit the button writes says what it is in the conversation's words.
+    expect(calls.some((call) => call[0] === 'commit' && call[2] === 'dsh-sbx: Fix the login crash')).toBe(true)
+    const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
+    expect(create[create.indexOf('--head') + 1]).toBe(result.branch)
+    expect(create[create.indexOf('--title') + 1]).toBe('Fix the login crash')
+    const body = create[create.indexOf('--body') + 1]!
+    expect(body).toContain('**Fix the login crash**')
+    expect(body).toContain('commit `deadbeefcafe`')
+    expect(body).toContain('abc1234 fix the login crash')
+    expect(body).toContain('src/login.ts | 12')
+    expect(body).toContain('committed the worktree')
+  })
+
+  it('renames the branch to what the change is about, before pushing it', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({
+      repoRoot,
+      dirty: ' M src/container/worktrees.ts\n',
+      remote: 'git@github.com:o/r.git',
+      mainBranch: 'main',
+      base: 'deadbeefcafebabedeadbeefcafebabedeadbeef',
+      log: 'abc1234 name the branch from the content',
+      stat: ' src/container/worktrees.ts | 61 +++++',
+    })
+    const manager = new WorktreeManager({
+      git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'),
+      titleFor: () => 'Also, when we create a branch',
+      brief: async () => ({
+        brief: {
+          branchSlug: 'name-branches-from-content',
+          title: 'Name the branch and describe the request from the change',
+          bullets: [
+            'The merge button names the branch from the staged diff.',
+            'A branch already on `origin` keeps its name.',
+          ],
+        },
+      }),
+    })
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(result.renamedFrom).toMatch(/^dsh-sbx\/also-when-we-create-a-branch-[0-9a-f]{6}$/)
+    expect(result.branch).toMatch(/^dsh-sbx\/name-branches-from-content-[0-9a-f]{6}$/)
+    // The rename has to precede the push: that is what makes it safe.
+    const renamed = calls.findIndex((call) => call[0] === 'branch' && call[1] === '-m')
+    const pushed = calls.findIndex((call) => call[0] === 'push')
+    expect(renamed).toBeGreaterThanOrEqual(0)
+    expect(calls[renamed]!.slice(0, 3)).toEqual(['branch', '-m', result.renamedFrom])
+    expect(calls[renamed]![3]).toBe(result.branch)
+    expect(pushed).toBeGreaterThan(renamed)
+    expect(calls[pushed]).toEqual(['push', '-u', 'origin', result.branch!])
+    // The commit subject and the request both take the child's wording.
+    expect(calls.some((call) => call[0] === 'commit' && call[2] === 'dsh-sbx: Name the branch and describe the request from the change')).toBe(true)
+    const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
+    expect(create[create.indexOf('--head') + 1]).toBe(result.branch)
+    expect(create[create.indexOf('--title') + 1]).toBe('Name the branch and describe the request from the change')
+    const body = create[create.indexOf('--body') + 1]!
+    expect(body).toContain('## Summary\n\n- The merge button names the branch from the staged diff.\n- A branch already on `origin` keeps its name.')
+    expect(body).toContain('## Commits (')
+  })
+
+  it('stages again after the naming pass, covering the window it opened', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'git@github.com:o/r.git' })
+    let stagedWhenAsked = 0
+    const manager = new WorktreeManager({
+      git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'),
+      brief: async () => {
+        stagedWhenAsked = calls.filter((call) => call[0] === 'add').length
+        return { brief: { branchSlug: 'a-name', bullets: ['- a change'] } }
+      },
+    })
+    await manager.mergeRequest('session-3', repoRoot)
+    // One staging feeds the pass; the second catches what was written during it.
+    expect(stagedWhenAsked).toBe(1)
+    expect(calls.filter((call) => call[0] === 'add' && call[1] === '-A')).toHaveLength(2)
+  })
+
+  it('keeps a branch that already reached origin, and says why', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'git@github.com:o/r.git', pushedBranch: true })
+    const brief = async () => ({ brief: { branchSlug: 'a-better-name', bullets: ['- a change'] } })
+    const manager = new WorktreeManager({
+      git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'), brief,
+    })
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(calls.some((call) => call[0] === 'branch' && call[1] === '-m')).toBe(false)
+    expect(calls).toContainEqual(['push', '-u', 'origin', 'dsh-sbx/session-3'])
+    expect(result.renamedFrom).toBeUndefined()
+    expect(result.nameNote).toContain('already been pushed')
+    // The bullets still describe the request; only the name is refused.
+    expect(createBody(calls)).toContain('- a change')
+  })
+
+  it('keeps the git description when the naming pass cannot answer', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'git@github.com:o/r.git' })
+    const manager = new WorktreeManager({
+      git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'),
+      brief: async () => ({ error: 'the subagent did not answer within 120000 ms' }),
+    })
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(result.briefError).toContain('did not answer within')
+    expect(result.renamedFrom).toBeUndefined()
+    expect(result.pushed).toBe(true)
+    expect(result.prUrl).toBe('https://github.com/o/r/pull/7')
+    expect(createBody(calls)).not.toContain('## Summary')
+  })
+
+  it('does not ask for a name when prBrief is off', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'git@github.com:o/r.git' })
+    let asked = 0
+    const manager = new WorktreeManager({
+      git, gh, config: testConfig({ ...wtConfig, prBrief: false }), paths: new PathMapper('workspace', '/workspace'),
+      brief: async () => {
+        asked += 1
+        return { brief: { branchSlug: 'a-better-name', bullets: ['- a change'] } }
+      },
+    })
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(asked).toBe(0)
+    expect(result.branch).toBe('dsh-sbx/session-3')
+    expect(calls.some((call) => call[0] === 'branch' && call[1] === '-m')).toBe(false)
+  })
+
+  it('describes the branch against HEAD when its fork point is unknown', async () => {
+    // A detached main checkout yields no merge-base; the request still reports
+    // what the branch carries instead of describing nothing.
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({ repoRoot, remote: 'git@github.com:o/r.git', log: 'abc1234 work', stat: ' a.ts | 1 +' })
+    const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    await manager.mergeRequest('session-3', repoRoot)
+    const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
+    const body = create[create.indexOf('--body') + 1]!
+    expect(body).toContain("the main checkout's `HEAD`")
+    expect(body).toContain('abc1234 work')
+    // No conversation title: a session-named branch is the honest title.
+    expect(create[create.indexOf('--title') + 1]).toBe('dsh-sbx/session-3')
+  })
+
   it('skips the commit when the worktree is already clean', async () => {
     const repoRoot = tempRoot()
     const { git, gh, calls } = fakeCli({ repoRoot, remote: 'git@github.com:o/r.git' })
@@ -228,7 +445,23 @@ describe('WorktreeManager.mergeRequest', () => {
     expect(result.pushed).toBe(true)
     expect(result.prUrl).toBeUndefined()
     expect(result.compareUrl).toBe('https://github.com/o/r/compare/dsh-sbx/session-3?expand=1')
+    expect(result.prError).toMatch(/GitHub CLI is not configured/)
     expect(calls.some((call) => call[0] === 'gh')).toBe(false)
+  })
+
+  it('reports why gh refused, instead of failing silently', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh } = fakeCli(
+      { repoRoot, dirty: ' M a\n', remote: 'https://github.com/o/r.git' },
+      undefined,
+      'gh: not logged to github.com; run `gh auth login`',
+    )
+    const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(result.pushed).toBe(true)
+    expect(result.prUrl).toBeUndefined()
+    expect(result.prError).toMatch(/not logged to github\.com/)
+    expect(result.compareUrl).toBe('https://github.com/o/r/compare/dsh-sbx/session-3?expand=1')
   })
 
   it('stops at a commit when the checkout has no remote', async () => {
