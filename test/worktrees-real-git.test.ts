@@ -9,6 +9,15 @@ import type { PullRequestFacts } from '../src/container/pr-description.ts'
 import { WorktreeManager } from '../src/container/worktrees.ts'
 import { testConfig } from './helpers.ts'
 
+// This suite drives real git, so it must not inherit the sandbox's own worktree
+// pointers (GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_*) from the container it runs in.
+for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY']) {
+  delete process.env[key]
+}
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith('GIT_CONFIG_')) delete process.env[key]
+}
+
 function hasGit(): boolean {
   try {
     execFileSync('git', ['--version'], { stdio: 'ignore' })
@@ -152,5 +161,43 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
       .map((name) => name.trim())
     expect(files).toContain('gate.ts')
     expect(files).toContain('late.ts')
+  })
+})
+
+describe.skipIf(!hasGit)('WorktreeManager.conflictsFor against real git', () => {
+  it('collects what a main sync left conflicted', async () => {
+    const { repo } = seededRepo()
+    writeFileSync(join(repo, 'shared.ts'), 'export const value = 1\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-m', 'shared base')
+    git(repo, 'push', 'origin', 'main')
+
+    const manager = new WorktreeManager({
+      git: createCliRunner(['git'], 'git'),
+      config: testConfig({ worktree: true, worktreeSyncIntervalMs: 0 }),
+      paths: new PathMapper('workspace', '/workspace'),
+    })
+    const entry = manager.ensure('session-3', repo)!
+    writeFileSync(join(entry.worktreePath, 'shared.ts'), 'export const value = 2 // session side\n')
+    git(entry.worktreePath, 'add', '-A')
+    git(entry.worktreePath, 'commit', '-m', 'session side')
+
+    writeFileSync(join(repo, 'shared.ts'), 'export const value = 3 // main side\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-m', 'main side')
+    git(repo, 'push', 'origin', 'main')
+
+    expect(await manager.syncFor('session-3', repo)).toMatchObject({ state: 'conflict', conflicts: ['shared.ts'] })
+
+    const bundle = await manager.conflictsFor('session-3', repo)
+    expect(bundle?.facts.merging).toBe(true)
+    expect(bundle?.facts.conflicts).toEqual(['shared.ts'])
+    expect(bundle?.facts.mergingSubject).toBe('main side')
+    expect(bundle?.facts.diff).toContain('<<<<<<<')
+    expect(bundle?.facts.diff).toContain('>>>>>>>')
+
+    const info = await manager.info('session-3', repo)
+    expect(info?.merging).toBe(true)
+    expect(info?.conflicts).toEqual(['shared.ts'])
   })
 })

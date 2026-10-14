@@ -23,32 +23,58 @@ export function phaseDotColor(phase: PillPhase): string {
         : DOT.idle
 }
 
-export function useSandboxStatus(sessionId: string): { status?: SandboxStatusView; error?: string } {
-  const [status, setStatus] = useState<SandboxStatusView | undefined>(undefined)
-  const [error, setError] = useState<string | undefined>(undefined)
+interface StatusSnapshot {
+  status?: SandboxStatusView
+  error?: string
+}
+
+interface Poller {
+  listeners: Set<(snapshot: StatusSnapshot) => void>
+  snapshot: StatusSnapshot
+  timer?: ReturnType<typeof setInterval>
+}
+
+// One poll per session, shared by every header pill: each status call fans out
+// into several git invocations on the host, and four pills would quadruple it.
+const pollers = new Map<string, Poller>()
+
+export function useSandboxStatus(sessionId: string): StatusSnapshot {
+  const [snapshot, setSnapshot] = useState<StatusSnapshot>({})
 
   useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const next = await fetchSandboxStatus(sessionId)
-        if (!alive) return
-        setStatus(next)
-        setError(next.error)
-      } catch (cause) {
-        if (!alive) return
-        setError((cause as Error).message)
+    let poller = pollers.get(sessionId)
+    if (poller === undefined) {
+      const shared: Poller = { listeners: new Set(), snapshot: {} }
+      const load = async () => {
+        try {
+          const next = await fetchSandboxStatus(sessionId)
+          shared.snapshot = { status: next, error: next.error }
+        } catch (cause) {
+          // Keep the last good status: the pills render nothing at all without a
+          // worktree, so one failed poll would hide them for a whole interval.
+          shared.snapshot = { ...shared.snapshot, error: (cause as Error).message }
+        }
+        for (const listener of shared.listeners) listener(shared.snapshot)
       }
+      void load()
+      shared.timer = setInterval(() => void load(), POLL_MS)
+      pollers.set(sessionId, shared)
+      poller = shared
     }
-    void load()
-    const timer = setInterval(() => void load(), POLL_MS)
+    const active = poller
+    const listener = (next: StatusSnapshot) => setSnapshot(next)
+    active.listeners.add(listener)
+    setSnapshot(active.snapshot)
     return () => {
-      alive = false
-      clearInterval(timer)
+      active.listeners.delete(listener)
+      if (active.listeners.size === 0) {
+        clearInterval(active.timer)
+        pollers.delete(sessionId)
+      }
     }
   }, [sessionId])
 
-  return { status, error }
+  return snapshot
 }
 
 export function useCopied(): { copied: boolean; markCopied: () => void } {

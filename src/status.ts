@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { randomUUID } from "node:crypto"
 import type {
   DurableUserMessage,
+  LiveAgent,
   SandboxContext,
   SubagentResult,
   SubagentRun,
@@ -10,6 +11,7 @@ import type {
 import type { SandboxConfig } from "./config.ts"
 import { PathMapper } from "./container/paths.ts"
 import { Provisioner, type SandboxStatus } from "./container/provisioner.ts"
+import { buildConflictPrompt } from "./container/conflicts.ts"
 import { buildReviewPrompt, changesAreEmpty } from "./container/review.ts"
 import { containerNameFor, type SandboxTarget } from "./container/session.ts"
 import { SandboxUnavailableError } from "./container/transport.ts"
@@ -40,20 +42,38 @@ export function sameOrigin(request: IncomingMessage): boolean {
   }
 }
 
-function settlementSummary(stopReason: string | undefined): string {
-  const subject = "The code review of this session's worktree"
+export interface SettlementKind {
+  subject: string
+  verdict: string
+}
+
+export const REVIEW_SETTLEMENT: SettlementKind = {
+  subject: "The code review of this session's worktree",
+  verdict: "Its review verdict:",
+}
+
+export const CONFLICT_SETTLEMENT: SettlementKind = {
+  subject: "The conflict resolver for this session's worktree",
+  verdict: "How it resolved the conflicts:",
+}
+
+function settlementSummary(stopReason: string | undefined, kind: SettlementKind): string {
   switch (stopReason) {
-    case "completed": return `${subject} finished.`
-    case "aborted": return `${subject} was stopped before it finished.`
-    case "max-tokens": return `${subject} ran out of room before it finished.`
-    case "refusal": return `${subject} declined the task.`
-    case "error": return `${subject} failed before it finished.`
-    default: return `${subject} ended (${String(stopReason ?? "unknown")}) without reporting a verdict.`
+    case "completed": return `${kind.subject} finished.`
+    case "aborted": return `${kind.subject} was stopped before it finished.`
+    case "max-tokens": return `${kind.subject} ran out of room before it finished.`
+    case "refusal": return `${kind.subject} declined the task.`
+    case "error": return `${kind.subject} failed before it finished.`
+    default: return `${kind.subject} ended (${String(stopReason ?? "unknown")}) without reporting.`
   }
 }
 
-export function settlementMessage(childId: string, result: SubagentResult | undefined): DurableUserMessage {
-  const summary = settlementSummary(result?.stopReason)
+export function settlementMessage(
+  childId: string,
+  result: SubagentResult | undefined,
+  kind: SettlementKind,
+): DurableUserMessage {
+  const summary = settlementSummary(result?.stopReason, kind)
   const closing = (result?.output ?? []).filter(
     (block): block is { type: string; text: string } => block.type === "text" && typeof block.text === "string" && block.text !== "",
   )
@@ -65,16 +85,17 @@ export function settlementMessage(childId: string, result: SubagentResult | unde
       { type: "text", text: summary },
       ...(closing.length === 0
         ? [{ type: "text", text: "It left no closing message." }]
-        : [{ type: "text", text: "Its review verdict:" }, ...closing.map((block) => ({ type: "text", text: block.text }))]),
+        : [{ type: "text", text: kind.verdict }, ...closing.map((block) => ({ type: "text", text: block.text }))]),
     ],
   }
 }
 
-export async function settleReviewRun(
+export async function settleSubagentRun(
   ctx: SandboxContext,
   run: SubagentRun,
   sessionId: string,
   childId: string,
+  kind: SettlementKind,
 ): Promise<void> {
   let result: SubagentResult | undefined
   try {
@@ -89,10 +110,42 @@ export async function settleReviewRun(
   try {
     const parent = ctx.agents?.get?.(sessionId)
     if (parent === undefined) return
-    const message = settlementMessage(childId, result)
+    const message = settlementMessage(childId, result, kind)
     if (parent.status === "running" && parent.steer !== undefined) parent.steer(message)
     else parent.followup?.(message)
   } catch {
+  }
+}
+
+// A resolver mutates the worktree, so only one may run per session at a time.
+// The slot expires on its own: a child whose result never settles must not lock
+// the button for the rest of the session. A slot releases only its own entry, so
+// a resolver that outlived the expiry cannot free whoever replaced it.
+const RESOLVER_TTL_MS = 15 * 60_000
+
+export interface ResolverSlot {
+  release(): void
+}
+
+export interface ResolverGuard {
+  tryStart(sessionId: string): ResolverSlot | undefined
+}
+
+export function createResolverGuard(now: () => number = Date.now): ResolverGuard {
+  const held = new Map<string, ResolverSlot & { expiresAt: number }>()
+  return {
+    tryStart: (sessionId) => {
+      const previous = held.get(sessionId)
+      if (previous !== undefined && previous.expiresAt > now()) return undefined
+      const slot: ResolverSlot & { expiresAt: number } = {
+        expiresAt: now() + RESOLVER_TTL_MS,
+        release: () => {
+          if (held.get(sessionId) === slot) held.delete(sessionId)
+        },
+      }
+      held.set(sessionId, slot)
+      return slot
+    },
   }
 }
 
@@ -102,6 +155,7 @@ export interface StatusDeps {
   config: SandboxConfig
   worktrees?: WorktreeManager
   subagents?: () => SubagentService | undefined
+  resolvers: ResolverGuard
 }
 
 type Respond = (status: number, body: unknown) => void
@@ -126,6 +180,41 @@ export async function handleMergeRequest(
   }
   const result = await deps.worktrees.mergeRequest(sessionId, workspace)
   respond(200, { ok: true, data: result })
+}
+
+interface SubagentLaunch {
+  subagents: SubagentService
+  provider: string
+  parent: LiveAgent
+}
+
+function subagentLaunch(
+  respond: Respond,
+  ctx: SandboxContext,
+  deps: StatusDeps,
+  sessionId: string,
+): SubagentLaunch | undefined {
+  const subagents = deps.subagents?.()
+  const provider = subagents?.list()[0]
+  if (subagents === undefined || provider === undefined) {
+    respond(503, {
+      ok: false,
+      error: {
+        code: "no-subagents",
+        message: subagents === undefined ? "the subagent service is not available" : "no subagent provider is registered",
+      },
+    })
+    return undefined
+  }
+  const parent = ctx.agents?.get?.(sessionId)
+  if (parent === undefined) {
+    respond(409, {
+      ok: false,
+      error: { code: "no-agent", message: "this session has no live agent to delegate from" },
+    })
+    return undefined
+  }
+  return { subagents, provider, parent }
 }
 
 export async function handleReview(
@@ -157,35 +246,89 @@ export async function handleReview(
     })
     return
   }
-  const subagents = deps.subagents?.()
-  const provider = subagents?.list()[0]
-  if (subagents === undefined || provider === undefined) {
-    respond(503, {
-      ok: false,
-      error: {
-        code: "no-subagents",
-        message: subagents === undefined ? "the subagent service is not available" : "no subagent provider is registered",
-      },
-    })
-    return
-  }
-  const parent = ctx.agents?.get?.(sessionId)
-  if (parent === undefined) {
-    respond(409, {
-      ok: false,
-      error: { code: "no-agent", message: "this session has no live agent to delegate from" },
-    })
-    return
-  }
-  const run = await subagents.start(provider, {
+  const launch = subagentLaunch(respond, ctx, deps, sessionId)
+  if (launch === undefined) return
+  const run = await launch.subagents.start(launch.provider, {
     prompt: [{ type: "text", text: buildReviewPrompt(bundle.entry, bundle.changes) }],
-    parent,
+    parent: launch.parent,
     signal: new AbortController().signal,
     label: "code review",
   })
   const childSessionId = run.localAgent?.session?.id ?? ""
-  void settleReviewRun(ctx, run, sessionId, childSessionId)
-  respond(200, { ok: true, data: { provider, childSessionId } })
+  void settleSubagentRun(ctx, run, sessionId, childSessionId, REVIEW_SETTLEMENT)
+  respond(200, { ok: true, data: { provider: launch.provider, childSessionId } })
+}
+
+export async function handleResolveConflicts(
+  respond: Respond,
+  ctx: SandboxContext,
+  deps: StatusDeps,
+  sessionId: string,
+  workspace: string,
+  isPost: boolean,
+): Promise<void> {
+  if (!isPost) {
+    respond(405, { ok: false, error: { code: "method-error", message: "resolve-conflicts requires POST" } })
+    return
+  }
+  if (deps.worktrees === undefined) {
+    respond(409, {
+      ok: false,
+      error: { code: "worktree-off", message: "worktree mode is disabled, so this session has no merge to resolve" },
+    })
+    return
+  }
+  const bundle = await deps.worktrees.conflictsFor(sessionId, workspace)
+  if (bundle === undefined) {
+    respond(409, {
+      ok: false,
+      error: { code: "no-worktree", message: "this session has no git worktree to resolve conflicts in (worktree mode is off, or no tool call has created one)" },
+    })
+    return
+  }
+  if (!bundle.facts.merging) {
+    respond(409, {
+      ok: false,
+      error: { code: "no-conflicts", message: "this session's worktree is not mid-merge, so there is nothing to resolve" },
+    })
+    return
+  }
+  const launch = subagentLaunch(respond, ctx, deps, sessionId)
+  if (launch === undefined) return
+  if (launch.parent.status === "running") {
+    respond(409, {
+      ok: false,
+      error: {
+        code: "agent-busy",
+        message: "the conversation's agent is mid-turn and may already be resolving these markers; wait for its turn to end, then click again",
+      },
+    })
+    return
+  }
+  const slot = deps.resolvers.tryStart(sessionId)
+  if (slot === undefined) {
+    respond(409, {
+      ok: false,
+      error: { code: "resolver-running", message: "a resolver is already working on this worktree; its report lands in the chat when it finishes" },
+    })
+    return
+  }
+  let run: SubagentRun
+  try {
+    run = await launch.subagents.start(launch.provider, {
+      prompt: [{ type: "text", text: buildConflictPrompt(bundle.entry, bundle.facts) }],
+      parent: launch.parent,
+      signal: new AbortController().signal,
+      label: "conflict resolution",
+    })
+  } catch (error) {
+    slot.release()
+    throw error
+  }
+  const childSessionId = run.localAgent?.session?.id ?? ""
+  void settleSubagentRun(ctx, run, sessionId, childSessionId, CONFLICT_SETTLEMENT)
+    .finally(() => slot.release())
+  respond(200, { ok: true, data: { provider: launch.provider, childSessionId, conflicts: bundle.facts.conflicts.length } })
 }
 
 export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void {
@@ -225,6 +368,10 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
         }
         if (action === "review") {
           await handleReview(respond, ctx, deps, sessionId, workspace, isPost)
+          return
+        }
+        if (action === "resolve-conflicts") {
+          await handleResolveConflicts(respond, ctx, deps, sessionId, workspace, isPost)
           return
         }
         const target: SandboxTarget = {

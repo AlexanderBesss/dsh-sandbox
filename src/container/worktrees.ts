@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SandboxConfig } from "../config.ts"
 import type { BootstrapLogger } from "./bootstrap.ts"
+import { collectConflicts, conflictedFiles, type ConflictFacts } from "./conflicts.ts"
 import { CliCommandError, type CliResult, type CliRunner } from "./git.ts"
 import { PathMapper } from "./paths.ts"
 import type { PrBrief, PullRequestBrief } from "./pr-brief.ts"
@@ -33,7 +34,13 @@ export interface WorktreeInfo {
   dirty: boolean
   unpushed: boolean
   merging: boolean
+  conflicts?: string[]
   behind?: number
+}
+
+export interface ConflictBundle {
+  entry: WorktreeEntry
+  facts: ConflictFacts
 }
 
 export type SyncState = "up-to-date" | "merged" | "conflict" | "failed" | "deferred" | "unavailable"
@@ -166,6 +173,7 @@ export class WorktreeManager {
     const status = await this.tryGit(["status", "--porcelain"], entry.worktreePath)
     const count = await this.tryGit(["rev-list", "--count", "HEAD", "--not", "--remotes"], entry.worktreePath)
     const merging = await this.isMerging(entry)
+    const conflicts = merging ? await conflictedFiles(this.deps.git, entry) : []
     const originRef = this.deps.config.worktreeSync.get() ? this.cachedOriginRef(entry.repoRoot) : undefined
     const behind = originRef === undefined ? undefined : await this.countBehind(entry, originRef)
     return {
@@ -175,6 +183,7 @@ export class WorktreeManager {
       dirty: status !== undefined && status.stdout.trim() !== "",
       unpushed: count !== undefined && Number.parseInt(count.stdout.trim(), 10) > 0,
       merging,
+      ...(merging ? { conflicts } : {}),
       ...(behind === undefined ? {} : { behind }),
     }
   }
@@ -188,6 +197,12 @@ export class WorktreeManager {
     const entry = this.lookup(sessionId, workspace)
     if (entry === undefined) return undefined
     return { entry, changes: await collectChanges(this.deps.git, entry) }
+  }
+
+  async conflictsFor(sessionId: string, workspace: string): Promise<ConflictBundle | undefined> {
+    const entry = this.lookup(sessionId, workspace)
+    if (entry === undefined) return undefined
+    return { entry, facts: await collectConflicts(this.deps.git, entry) }
   }
 
   async syncFor(sessionId: string, workspace: string): Promise<SyncOutcome | undefined> {
@@ -254,7 +269,7 @@ export class WorktreeManager {
         )
         return { state: "failed", behind }
       }
-      const conflicts = await this.conflictedFiles(entry)
+      const conflicts = await conflictedFiles(this.deps.git, entry)
       this.deps.logger?.warn?.(
         `dsh-docker-sandbox: syncing session ${entry.sessionId} to ${originRef} conflicted in ${conflicts.length} file(s); `
         + "the session was asked to resolve them",
@@ -264,6 +279,7 @@ export class WorktreeManager {
         ...(conflicts.length === 0 ? ["The merge left conflicts; `git status` shows which files."] : ["These files conflict:", ...conflicts.map((file) => `  ${file}`)]),
         `The worktree is mid-merge. Resolve the conflict markers under ${this.deps.config.containerWorkspace} and finish with \`git commit\``,
         "(or `git merge --abort` to back the merge out). Do not open a merge request while it is unresolved.",
+        "The *resolve conflicts* button in the session header hands the same job to a fresh resolver session.",
       ].join("\n")
       if (this.deps.notify?.(entry.sessionId, notice) === true) {
         entry.notifiedMerging = true
@@ -283,12 +299,13 @@ export class WorktreeManager {
 
   private async notifyMidMerge(entry: WorktreeEntry): Promise<void> {
     if (entry.notifiedMerging === true) return
-    const conflicts = await this.conflictedFiles(entry)
+    const conflicts = await conflictedFiles(this.deps.git, entry)
     const notice = [
       "dsh-docker-sandbox: this session's worktree is mid-merge with unresolved conflicts.",
       ...(conflicts.length === 0 ? ["Run `git status` to see which files conflict."] : ["These files conflict:", ...conflicts.map((file) => `  ${file}`)]),
       `Resolve the conflict markers under ${this.deps.config.containerWorkspace} and finish with \`git commit\``,
       "(or `git merge --abort` to back the merge out). Do not open a merge request while it is unresolved.",
+      "The *resolve conflicts* button in the session header hands the same job to a fresh resolver session.",
     ].join("\n")
     if (this.deps.notify?.(entry.sessionId, notice) === true) {
       entry.notifiedMerging = true
@@ -420,12 +437,6 @@ export class WorktreeManager {
     } catch {
       return false
     }
-  }
-
-  private async conflictedFiles(entry: WorktreeEntry): Promise<string[]> {
-    const names = await this.tryGit(["diff", "--name-only", "--diff-filter=U"], entry.worktreePath)
-    if (names === undefined) return []
-    return names.stdout.trim().split("\n").filter((line) => line !== "")
   }
 
   private revParse(repoRoot: string, ref: string): string | undefined {

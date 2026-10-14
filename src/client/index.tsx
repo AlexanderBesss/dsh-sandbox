@@ -3,6 +3,7 @@ import { ContainerChip } from "./chip.tsx"
 import { SandboxConfigForm, type RowConfigForm } from "./config-form.tsx"
 import { MergeRequestButton } from "./merge-button.tsx"
 import { ReviewButton } from "./review-button.tsx"
+import { ResolveConflictsButton } from "./resolve-button.tsx"
 
 interface SlotRegistration {
   name: string
@@ -41,8 +42,16 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
     name: "conversation.session.header.utilities",
-    id: "dsh-docker-sandbox:review",
+    id: "dsh-docker-sandbox:resolve",
     order: 22,
+    label: "Resolve conflicts",
+    registrant: "dsh-docker-sandbox",
+  }, (props) => createElement(ResolveConflictsButton, { sessionId: props.sessionId })))
+
+  ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
+    name: "conversation.session.header.utilities",
+    id: "dsh-docker-sandbox:review",
+    order: 23,
     label: "Review changes",
     registrant: "dsh-docker-sandbox",
   }, (props) => createElement(ReviewButton, { sessionId: props.sessionId })))
