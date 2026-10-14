@@ -10,23 +10,32 @@ export type BootstrapLogger = {
 export interface BootstrapFacts {
   agentsMissing: boolean
   rgMissing: boolean
+  playwrightMissing: boolean
 }
+
+// PW=yes requires the CLI and a non-empty browser registry together; the registry
+// path honors PLAYWRIGHT_BROWSERS_PATH so images that relocate it are read where
+// they are. Non-root images report PW=skip: the install needs root for global npm
+// and for the apt system deps.
+const PROBE_SCRIPT = "test -f /tmp/.dsh-run.sh && echo AGENTS=yes || echo AGENTS=no; "
+  + "command -v rg >/dev/null 2>&1 && echo RG=yes || echo RG=no; "
+  + 'pwdir="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"; '
+  + 'if ! command -v npm >/dev/null 2>&1 || [ "$(id -u)" != 0 ]; then echo PW=skip; '
+  + 'elif command -v playwright >/dev/null 2>&1 && [ -n "$(ls -A "$pwdir" 2>/dev/null)" ]; then echo PW=yes; '
+  + "else echo PW=no; fi"
 
 export async function probeBootstrap(transport: DockerTransport, target: SandboxTarget): Promise<BootstrapFacts> {
   const probe = await transport
-    .execInContainer(
-      target,
-      [
-        "sh",
-        "-c",
-        "test -f /tmp/.dsh-run.sh && echo AGENTS=yes || echo AGENTS=no; "
-        + "command -v rg >/dev/null 2>&1 && echo RG=yes || echo RG=no",
-      ],
-      { timeoutMs: 30000 },
-    )
+    .execInContainer(target, ["sh", "-c", PROBE_SCRIPT], { timeoutMs: 30000 })
     .catch(() => undefined)
-  const facts = probe === undefined ? "AGENTS=no\nRG=no" : probe.stdout.toString("utf8")
-  return { agentsMissing: facts.includes("AGENTS=no"), rgMissing: facts.includes("RG=no") }
+  // PW=no on probe failure, not skip: the install is idempotent, and a failed
+  // probe exec means the install exec fails fast too.
+  const facts = probe === undefined ? "AGENTS=no\nRG=no\nPW=no" : probe.stdout.toString("utf8")
+  return {
+    agentsMissing: facts.includes("AGENTS=no"),
+    rgMissing: facts.includes("RG=no"),
+    playwrightMissing: facts.includes("PW=no"),
+  }
 }
 
 export type RipgrepSource = "package" | "url" | "none"
@@ -40,21 +49,53 @@ export function ripgrepInstallCommand(source: RipgrepSource): string {
       + "else echo 'no package manager found for ripgrep' >&2; exit 3; fi"
 }
 
+// execInContainer throws on any non-zero exit or timeout, so bootstrap failures
+// must be caught here: an uncaught error would fail ensure() and leave the entry
+// unbootstrapped, making every later command retry the whole install.
+const failureMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
 export async function installRipgrep(
   transport: DockerTransport,
   target: SandboxTarget,
   source: RipgrepSource,
   logger?: BootstrapLogger,
 ): Promise<void> {
-  const result = await transport.execInContainer(
-    target,
-    ["sh", "-c", ripgrepInstallCommand(source)],
-    { timeoutMs: 180000 },
-  )
-  if (result.code !== 0) {
-    logger?.warn?.(
-      `ripgrep bootstrap failed in ${target.container} (exit ${result.code}): ${result.stderr.toString("utf8").trim().slice(0, 300)}`,
+  try {
+    await transport.execInContainer(
+      target,
+      ["sh", "-c", ripgrepInstallCommand(source)],
+      { timeoutMs: 180000 },
     )
+  } catch (error) {
+    logger?.warn?.(`ripgrep bootstrap failed in ${target.container}: ${failureMessage(error).slice(0, 300)}`)
+  }
+}
+
+const SAFE_VERSION = /^[0-9][0-9A-Za-z.+-]{0,31}$/
+
+export function playwrightInstallCommand(browsers: readonly string[], version: string): string {
+  const list = browsers.length > 0 ? browsers.join(" ") : "chromium"
+  const pkg = SAFE_VERSION.test(version) ? `playwright@${version}` : "playwright"
+  return `npm install -g ${pkg} && playwright install --with-deps ${list}`
+}
+
+export async function installPlaywright(
+  transport: DockerTransport,
+  target: SandboxTarget,
+  browsers: readonly string[],
+  version: string,
+  timeoutMs: number,
+  logger?: BootstrapLogger,
+): Promise<void> {
+  try {
+    await transport.execInContainer(
+      target,
+      ["sh", "-c", playwrightInstallCommand(browsers, version)],
+      { timeoutMs },
+    )
+  } catch (error) {
+    logger?.warn?.(`playwright bootstrap failed in ${target.container}: ${failureMessage(error).slice(0, 300)}`)
   }
 }
 

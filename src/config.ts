@@ -5,7 +5,7 @@ import Schema from "@deepseek-ai/schemastery"
 export const Config = Schema.object({
   dockerArgv: Schema.array(Schema.string()).default(["docker"]),
 
-  image: Schema.string().default("alpine:3.20").volatile(),
+  image: Schema.string().default("node:24").volatile(),
 
   command: Schema.array(Schema.string()).default(["sleep", "infinity"]),
 
@@ -39,6 +39,20 @@ export const Config = Schema.object({
     Schema.const("url"),
     Schema.const("none"),
   ]).default("package"),
+
+  bootstrapPlaywright: Schema.boolean().default(true).description(
+    "install the Playwright CLI and browsers into the container on first use; skipped when the image already carries them or has no npm",
+  ),
+
+  playwrightBrowsers: Schema.array(
+    Schema.union([Schema.const("chromium"), Schema.const("firefox"), Schema.const("webkit")]),
+  ).default(["chromium"]),
+
+  playwrightVersion: Schema.string().default("1.64.1").description(
+    "npm version pinned for the bootstrap install, so containers provisioned months apart match; empty installs the latest",
+  ),
+
+  playwrightInstallTimeoutMs: Schema.number().min(1000).default(600000),
 
   idleTtlMs: Schema.number().min(0).default(7200000).volatile(),
 

@@ -5,7 +5,21 @@ describe('Config', () => {
   it('defaults an empty config to a working sandbox', () => {
     const config = Config({})
     expect(config.mountMode).toBe('workspace')
-    expect(config.image.get()).toBe('alpine:3.20')
+    expect(config.image.get()).toBe('node:24')
+  })
+
+  it('bootstraps playwright with chromium by default', () => {
+    const config = Config({})
+    expect(config.bootstrapPlaywright).toBe(true)
+    expect(config.playwrightBrowsers).toEqual(['chromium'])
+    expect(config.playwrightVersion).toBe('1.64.1')
+    expect(config.playwrightInstallTimeoutMs).toBe(600000)
+    expect(() => Config({ playwrightInstallTimeoutMs: 0 })).toThrow()
+  })
+
+  it('accepts the three playwright browsers and rejects a typo at load', () => {
+    expect(Config({ playwrightBrowsers: ['firefox', 'webkit'] }).playwrightBrowsers).toEqual(['firefox', 'webkit'])
+    expect(() => Config({ playwrightBrowsers: ['cromium'] } as never)).toThrow()
   })
 
   it('accepts the two mount modes and rejects a typo at load', () => {

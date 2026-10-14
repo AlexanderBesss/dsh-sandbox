@@ -6,10 +6,10 @@ import { testConfig, fakeTransport, type FakeEngine } from './helpers.ts'
 
 const WINDOWS = 'F:\\Projects\\dsh-sandbox'
 
-function makeProvisioner(engine: FakeEngine = {}, overrides = {}, hooks: ProvisionerHooks = {}) {
+function makeProvisioner(engine: FakeEngine = {}, overrides = {}, hooks: ProvisionerHooks = {}, logger?: { warn: (...args: unknown[]) => void }) {
   const config = testConfig(overrides)
   const { transport, calls } = fakeTransport(engine)
-  const provisioner = new Provisioner(transport, config, new PathMapper('workspace', config.containerWorkspace), undefined, hooks)
+  const provisioner = new Provisioner(transport, config, new PathMapper('workspace', config.containerWorkspace), logger, hooks)
   const target = {
     sessionId: 'session-3',
     container: containerNameFor('session-3'),
@@ -55,7 +55,7 @@ describe('Provisioner.runArgs', () => {
     const { provisioner, target } = makeProvisioner()
     const args = provisioner.runArgs(target)
     const tail = args.slice(-3)
-    expect(tail).toEqual(['alpine:3.20', 'sleep', 'infinity'])
+    expect(tail).toEqual(['node:24', 'sleep', 'infinity'])
   })
 
   it('leaves the container unbounded unless limits are configured', () => {
@@ -117,12 +117,62 @@ describe('Provisioner.ensure', () => {
   })
 
   it('copies the command runner in when the container is fresh', async () => {
-    const { provisioner, calls, target } = makeProvisioner({ state: 'running', probe: 'AGENTS=no\nRG=no' })
+    const { provisioner, calls, target } = makeProvisioner({ state: 'running', probe: 'AGENTS=no\nRG=no\nPW=skip' })
     await provisioner.ensure(target)
 
     const uploads = calls.filter((call) => call.args[2]?.startsWith('cat >'))
     expect(uploads.map((call) => call.args[2])).toEqual(['cat > /tmp/.dsh-run.sh'])
     for (const upload of uploads) expect(String(upload.stdin).length).toBeGreaterThan(0)
+  })
+
+  it('installs playwright when the image carries npm but not the library', async () => {
+    const { provisioner, calls, target } = makeProvisioner({ state: 'running', probe: 'AGENTS=yes\nRG=yes\nPW=no' })
+    await provisioner.ensure(target)
+
+    const install = calls.find((call) => call.args[2]?.includes('npm install -g playwright'))
+    expect(install, 'the install argv must carry the pinned version and browser list').toBeDefined()
+    expect(install!.args[2]).toContain('playwright@1.64.1')
+    expect(install!.args[2]).toContain('playwright install --with-deps chromium')
+  })
+
+  it('survives a failed playwright install and does not retry it per command', async () => {
+    const warnings: string[] = []
+    const { provisioner, calls, target } = makeProvisioner(
+      { state: 'running', probe: 'AGENTS=yes\nRG=yes\nPW=no', execFails: true },
+      {},
+      {},
+      { warn: (message) => warnings.push(String(message)) },
+    )
+    await provisioner.ensure(target)
+    await provisioner.ensure(target)
+
+    expect(calls.filter((call) => call.args[2]?.includes('npm install -g'))).toHaveLength(1)
+    expect(warnings.some((warning) => warning.includes('playwright bootstrap failed'))).toBe(true)
+  })
+
+  it('skips the playwright install when bootstrapPlaywright is off', async () => {
+    const { provisioner, calls, target } = makeProvisioner(
+      { state: 'running', probe: 'AGENTS=yes\nRG=yes\nPW=no' },
+      { bootstrapPlaywright: false },
+    )
+    await provisioner.ensure(target)
+
+    expect(calls.some((call) => call.args[2]?.includes('npm install -g'))).toBe(false)
+  })
+
+  it('skips the playwright install when the image already carries it', async () => {
+    const { provisioner, calls, target } = makeProvisioner({ state: 'running', probe: 'AGENTS=yes\nRG=yes\nPW=yes' })
+    await provisioner.ensure(target)
+
+    expect(calls.some((call) => call.args[2]?.includes('npm install -g playwright'))).toBe(false)
+  })
+
+  it('skips the playwright install on images without npm', async () => {
+    const { provisioner, calls, target } = makeProvisioner({ state: 'running', probe: 'AGENTS=no\nRG=no\nPW=skip' })
+    await provisioner.ensure(target)
+
+    expect(calls.some((call) => call.args[2]?.includes('npm install -g playwright'))).toBe(false)
+    expect(calls.some((call) => call.args[2]?.startsWith('cat >'))).toBe(true)
   })
 
   it('shares one provisioning run between concurrent calls for the same chat', async () => {
