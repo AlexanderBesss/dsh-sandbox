@@ -16,7 +16,7 @@ function ref<T>(v: T): { get(): T } {
 export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): SandboxConfig {
   const plain = {
     dockerArgv: ['docker'],
-    image: 'alpine:3.20',
+    image: 'node:24',
     command: ['sleep', 'infinity'],
     mountMode: 'workspace',
     containerWorkspace: '/workspace',
@@ -31,6 +31,10 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     pwshGuard: true,
     bootstrapTools: true,
     ripgrepSource: 'package',
+    bootstrapPlaywright: true,
+    playwrightBrowsers: ['chromium'],
+    playwrightVersion: '1.64.1',
+    playwrightInstallTimeoutMs: 600000,
     idleTtlMs: 7200000,
     gcIntervalMs: 60000,
     terminalPty: false,
@@ -84,6 +88,7 @@ export interface FakeEngine {
   inspect?: unknown[]
   owned?: { id: string; name: string; state: string; created?: string; sessionId?: string }[]
   probe?: string
+  execFails?: boolean
   runFails?: boolean
   engineDown?: boolean
   foreign?: boolean
@@ -147,7 +152,10 @@ export function fakeTransport(engine: FakeEngine = {}): { transport: DockerTrans
     async execInContainer(target: { container: string }, argv: string[], opts: { stdin?: Buffer | string } = {}) {
       calls.push({ kind: 'execInContainer', args: argv, target, ...(opts.stdin === undefined ? {} : { stdin: opts.stdin }) })
       if (argv[2]?.includes('AGENTS=')) {
-        return { ...ok, stdout: Buffer.from(engine.probe ?? 'AGENTS=yes\nRG=yes') }
+        return { ...ok, stdout: Buffer.from(engine.probe ?? 'AGENTS=yes\nRG=yes\nPW=yes') }
+      }
+      if (engine.execFails === true && argv[2]?.includes('npm install -g')) {
+        fail('npm ERR! code EAI_AGAIN: request to https://registry.npmjs.org/playwright failed')
       }
       return ok
     },
