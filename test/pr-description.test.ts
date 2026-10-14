@@ -8,15 +8,12 @@ import {
 
 function facts(overrides: Partial<PullRequestFacts> = {}): PullRequestFacts {
   return {
-    sessionId: 'session-3',
     branch: 'dsh-sbx/fix-the-login-crash-1a2b3c',
     worktreePath: 'F:\\Projects\\repo.worktrees\\fix-the-login-crash-1a2b3c',
     mainWorkspace: 'F:\\Projects\\repo',
-    container: 'dsh-sbx-session-3',
     base: 'deadbeefcafe',
     log: 'abc1234 fix the login crash\n5678def cover it with a test',
     stat: ' src/login.ts | 12 ++++++++\n 1 file changed, 12 insertions(+)',
-    committed: false,
     ...overrides,
   }
 }
@@ -49,16 +46,16 @@ describe('prTitleFor', () => {
 })
 
 describe('prBodyFor', () => {
-  it('describes the conversation, the branch, and what it changed', () => {
+  it('keeps the body to the change itself, with no internal identifiers', () => {
     const body = prBodyFor(facts({ title: 'Fix the login crash' }))
-    expect(body).toContain('**Fix the login crash**')
-    expect(body).toContain('`session-3`')
-    expect(body).toContain('`dsh-sbx/fix-the-login-crash-1a2b3c`')
-    expect(body).toContain('commit `deadbeefcafe`')
     expect(body).toContain('## Commits (2)')
     expect(body).toContain('abc1234 fix the login crash')
+    expect(body).not.toContain('session')
+    expect(body).not.toContain('dsh-sbx/')
+    expect(body).not.toContain('deadbeefcafe')
+    expect(body).not.toContain('repo.worktrees')
     expect(body).not.toContain('src/login.ts | 12')
-    expect(body).toContain('dsh-sbx-session-3')
+    expect(body).not.toContain('container')
   })
 
   it('puts the AI bullets above the git evidence, and keeps the git evidence', () => {
@@ -69,16 +66,10 @@ describe('prBodyFor', () => {
     expect(prBodyFor(facts({ summary: [] }))).not.toContain('## Summary')
   })
 
-  it('says when the button wrote the commit itself', () => {
-    expect(prBodyFor(facts())).not.toContain('committed the worktree')
-    expect(prBodyFor(facts({ committed: true }))).toContain('committed the worktree')
-  })
-
   it('is explicit about having nothing to show', () => {
     const body = prBodyFor(facts({ log: '', stat: '', base: undefined, title: undefined }))
+    expect(body).toContain('## Commits (0)')
     expect(body).toContain('(none)')
-    expect(body).toContain("the main checkout's `HEAD`")
-    expect(body).toContain('`session-3`')
   })
 
   it('stays inside the size a host accepts, and says when it cut', () => {

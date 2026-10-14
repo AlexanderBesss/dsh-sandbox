@@ -232,8 +232,6 @@ F:\Projects\app.worktrees\fix-the-login-crash-1a2b3c   (branch dsh-sbx/fix-the-l
   `dsh-sbx/session-3`, and the description says what the change does:
 
   ```
-  Work from the sandboxed conversation **Also, when we create a branch** …
-
   ## Summary
 
   - The merge button names the branch from the staged diff, so `git branch`

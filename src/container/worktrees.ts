@@ -8,7 +8,7 @@ import { PathMapper } from "./paths.ts"
 import type { PrBrief, PullRequestBrief } from "./pr-brief.ts"
 import { prBodyFor, prTitleFor, type PullRequestFacts } from "./pr-description.ts"
 import { collectChanges, forkPointFor, type SessionChanges } from "./review.ts"
-import { branchSlugFor, containerNameFor, sessionSlugFor, slugDigest } from "./session.ts"
+import { branchSlugFor, sessionSlugFor, slugDigest } from "./session.ts"
 
 export interface WorktreeEntry {
   sessionId: string
@@ -458,7 +458,7 @@ export class WorktreeManager {
 
     const title = this.deps.titleFor?.(sessionId)
     await this.deps.git.run(["add", "-A"], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
-    const staged = await this.prFacts(sessionId, entry, title)
+    const staged = await this.prFacts(entry, title)
     const answered = await this.briefFor(sessionId, staged)
     const brief = answered.brief
 
@@ -472,7 +472,6 @@ export class WorktreeManager {
     const remote = await this.pushOrigin(entry)
     const pr = remote === undefined ? {} : await this.openPullRequest(entry, remote, {
       ...staged,
-      committed,
       branch: entry.branch,
       log,
       ...(brief === undefined
@@ -502,9 +501,7 @@ export class WorktreeManager {
   }
 
   private async commitWorktree(entry: WorktreeEntry, subject: string): Promise<void> {
-    const detail = `Session work from container ${containerNameFor(entry.sessionId)}, `
-      + "committed by the dsh-docker-sandbox merge button."
-    await this.deps.git.run(["commit", "-m", subject, "-m", detail], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
+    await this.deps.git.run(["commit", "-m", subject], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
   }
 
   private async pushOrigin(entry: WorktreeEntry): Promise<string | undefined> {
@@ -614,7 +611,6 @@ export class WorktreeManager {
   }
 
   private async prFacts(
-    sessionId: string,
     entry: WorktreeEntry,
     title: string | undefined,
   ): Promise<PullRequestFacts> {
@@ -626,15 +622,12 @@ export class WorktreeManager {
     )
     const named = (title ?? "").trim()
     return {
-      sessionId,
       branch: entry.branch,
       worktreePath: entry.worktreePath,
       mainWorkspace: entry.mainWorkspace,
-      container: containerNameFor(sessionId),
       ...(base === undefined ? {} : { base: base.slice(0, 12) }),
       log,
       stat: stat?.stdout.trim() ?? "",
-      committed: false,
       ...(named === "" ? {} : { title: named }),
     }
   }
