@@ -51,6 +51,9 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     worktree: false,
     worktreeRoot: '',
     worktreeBranchPrefix: 'dsh-sbx/',
+    npmCacheHost: '',
+    worktreeInstall: true,
+    warmInstallTimeoutMs: 600000,
     gitArgv: ['git'],
     ghArgv: ['gh'],
     ...overrides,
@@ -68,6 +71,7 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     idleTtlMs: ref(plain.idleTtlMs),
     worktree: ref(plain.worktree),
     worktreeRoot: ref(plain.worktreeRoot),
+    worktreeInstall: ref(plain.worktreeInstall),
     resourceLimits: {
       cpu: ref(plain.resourceLimits.cpu),
       memory: ref(plain.resourceLimits.memory),

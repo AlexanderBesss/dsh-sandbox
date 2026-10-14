@@ -32,6 +32,8 @@ import { DockerFileSystem } from "./seams/fs.ts"
 import { startContainerGc } from "./container/gc.ts"
 import { createCliRunner } from "./container/git.ts"
 import { createEngineGate } from "./container/engine-gate.ts"
+import { createWarmInstall } from "./container/warm-install.ts"
+import type { SandboxTarget } from "./container/session.ts"
 import { type MountMode, PathMapper } from "./container/paths.ts"
 import { Provisioner } from "./container/provisioner.ts"
 import { registerStatusRoute } from "./status.ts"
@@ -62,6 +64,11 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
   const mountMode: MountMode = config.mountMode === "drives" ? "drives" : "workspace"
   const paths = new PathMapper(mountMode, config.containerWorkspace)
   const transport = new DockerTransport(config)
+  // The warm install needs the provisioner (for its work lease) and the
+  // provisioner needs the install (as its container-ready hook); the forward
+  // declaration unties the knot, and the hook only ever fires after `apply`
+  // has assigned the real handler.
+  let warmInstall: (target: SandboxTarget) => void = () => undefined
   const provisioner = new Provisioner(transport, config, paths, ctx.logger, {
     // A container the engine still holds for a chat this app has open is not an
     // orphan, even when this process never provisioned it.
@@ -72,6 +79,7 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     isSessionArchived: (sessionId) =>
       (ctx.get("workspaceRegistry") as { archivedSessionIds?: readonly string[] } | undefined)
         ?.archivedSessionIds?.includes(sessionId) === true,
+    onContainerReady: (target) => warmInstall(target),
   })
   // Worktree mode is read live (it is a volatile option), so the manager is
   // always built; `ensure` is a no-op while the toggle is off.
@@ -82,6 +90,7 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     logger: ctx.logger,
     paths,
   })
+  warmInstall = createWarmInstall({ transport, provisioner, worktrees, config, logger: ctx.logger })
 
   // Registering a Service instance replaces the seam for the whole app; the
   // bundle patch has already disabled the local providers this displaces.
