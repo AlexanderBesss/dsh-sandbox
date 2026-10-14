@@ -31,6 +31,7 @@ import { Config, type SandboxConfig } from "./config.ts"
 import { DockerFileSystem } from "./seams/fs.ts"
 import { startContainerGc } from "./container/gc.ts"
 import { createCliRunner } from "./container/git.ts"
+import { createEngineGate } from "./container/engine-gate.ts"
 import { type MountMode, PathMapper } from "./container/paths.ts"
 import { Provisioner } from "./container/provisioner.ts"
 import { registerStatusRoute } from "./status.ts"
@@ -116,6 +117,11 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
   ctx.on("workspace/session-stop", ({ sessionId }: { sessionId: string }) =>
     provisioner.releaseSession(sessionId),
   )
+
+  // Worktree mode with the engine down would edit the main checkout while
+  // claiming the sandbox's isolation, so the turn fails with the instruction
+  // that fixes it instead of answering. (See container/engine-gate.ts.)
+  ctx.on("agent/pre-step", createEngineGate(provisioner, config))
 
   // A disposed session is gone for good: archived, deleted, or a subagent
   // child whose run settled (the reviewer's container used to sit in its

@@ -29,6 +29,28 @@ declare module "@deepseek-ai/cordis" {
      * @mode broadcast
      */
     "session/disposed"(session: { id: string }): void
+
+    /**
+     * Waterfall: the agent loop (`dsh-agent-loop`) proposes one step and
+     * dispatches this before anything of it runs. A listener returns the
+     * downstream decision, replaces it (`{ kind: "reject" }` ends the turn as
+     * `blocked`, silently), or throws — which ends the turn as an error the
+     * app renders in the conversation. The app's own archived-session gate
+     * and the Claude-Code hooks use this same boundary.
+     * @mode waterfall
+     */
+    "agent/pre-step"(
+      payload: {
+        /** The agent the step is proposed for. */
+        agent: { id: string }
+        /** The inbox batch claimed for this step. */
+        messages: readonly unknown[]
+        turn: number
+        step: number
+        signal: AbortSignal
+      },
+      next: () => Promise<{ kind: string; messages?: readonly unknown[] }>,
+    ): Promise<{ kind: string; messages?: readonly unknown[] }>
   }
 }
 

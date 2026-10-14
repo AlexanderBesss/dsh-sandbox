@@ -347,3 +347,26 @@ describe('Provisioner.ensure liveness guard', () => {
     expect(calls.some((call) => call.args[0] === 'run')).toBe(true)
   })
 })
+
+describe('Provisioner.engineReachable', () => {
+  it('probes the engine once and caches the answer', async () => {
+    const { provisioner, calls } = makeProvisioner()
+    expect((await provisioner.engineReachable()).reachable).toBe(true)
+    expect((await provisioner.engineReachable()).reachable).toBe(true)
+    expect(calls.filter((call) => call.args[0] === 'version')).toHaveLength(1)
+  })
+
+  it('reports an unreachable engine with the daemon detail', async () => {
+    const { provisioner } = makeProvisioner({ engineDown: true })
+    const probe = await provisioner.engineReachable()
+    expect(probe.reachable).toBe(false)
+    expect(probe.error).toMatch(/Cannot connect to the Docker daemon/)
+  })
+
+  it('re-probes once the cached answer goes stale', async () => {
+    const { provisioner, calls } = makeProvisioner()
+    await provisioner.engineReachable(0)
+    await provisioner.engineReachable(0)
+    expect(calls.filter((call) => call.args[0] === 'version')).toHaveLength(2)
+  })
+})
