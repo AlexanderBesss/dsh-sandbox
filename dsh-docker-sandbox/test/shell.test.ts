@@ -1,11 +1,3 @@
-/**
- * The shell handle's incremental output reader.
- *
- * stdout and stderr are independent byte streams, so each needs its own cursor;
- * a shared one re-emits output a caller already received, which is what these
- * tests pin down.
- */
-
 import { describe, expect, it } from 'vitest'
 import { DockerShellExecutor, looksLikePowerShell } from '../src/seams/shell.ts'
 import { type DockerSubprocessRuntime } from '../src/seams/subprocess.ts'
@@ -25,7 +17,6 @@ interface FakeHandle {
   waitForExit(): Promise<boolean>
 }
 
-/** A live handle whose output the test feeds by hand. */
 function fakeHandle(options: { exit?: { exitCode: number | null; signal: string | null; killed: boolean } } = {}): FakeHandle & {
   stdout: OutputTail
   stderr: OutputTail
@@ -36,8 +27,7 @@ function fakeHandle(options: { exit?: { exitCode: number | null; signal: string 
     collected: { stdout, stderr },
     stdout,
     stderr,
-    // No `exit` means a background process nobody has awaited yet: `done` stays
-    // open so the test can poll `readOutput` while it is still running.
+    // no `exit` means a background process nobody has awaited: `done` stays open so tests can poll readOutput
     done: options.exit === undefined
       ? new Promise(() => undefined)
       : Promise.resolve(options.exit),
@@ -84,8 +74,7 @@ describe('DockerShellExecutor.readOutput', () => {
     expect(process.readOutput().delta).toContain('warning one')
 
     handle.stderr.append(Buffer.from('warning two\n'))
-    // A cursor shared with stdout never moved (stdout produced nothing), so a
-    // shared cursor would hand the first warning back a second time.
+    // a cursor shared with stdout never moved: it would hand the first warning back a second time
     const second = process.readOutput().delta
     expect(second).toContain('warning two')
     expect(second).not.toContain('warning one')
@@ -97,7 +86,6 @@ describe('DockerShellExecutor.readOutput', () => {
     expect(next).toContain('warning three')
     expect(next).not.toContain('warning two')
 
-    // Everything consumed: the next poll is empty rather than a repeat.
     expect(process.readOutput().delta).toBe('')
   })
 
@@ -134,8 +122,7 @@ describe('DockerShellExecutor.execute', () => {
   })
 
   it('keeps a stamped spec on the container it was resolved for', async () => {
-    // The stamp is the binding: executing later — while another chat is the
-    // initiator — must not re-route the command into that chat's container.
+    // the stamp is the binding: executing while another chat is initiator must not re-route it
     const handle = fakeHandle({ exit: { exitCode: 0, signal: null, killed: false } })
     const stamped = makeExecutor(handle).resolve({ command: 'true' })
     expect(stamped.container).toBe('dsh-sbx-session-1')
@@ -189,7 +176,6 @@ describe('DockerShellExecutor PowerShell guard', () => {
     expect(result.exitCode).toBe(127)
     expect(result.stderr.text).toContain('PowerShell is not available')
     expect(result.stderr.text).toContain('/workspace')
-    // Nothing was spawned: the guard answers before the container runs anything.
     expect(spawnLog).toHaveLength(0)
   })
 })

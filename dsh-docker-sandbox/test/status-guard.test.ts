@@ -1,11 +1,3 @@
-/**
- * The status route's CSRF guard.
- *
- * The regression these pin: the app's renderer lives on the `dsh-app:` scheme
- * and its POSTs are bridged to this server carrying that origin (or none) -
- * the old exact-host rule rejected them, so the merge and review buttons only
- * ever worked from curl. Cross-site web origins must still be refused.
- */
 import { describe, expect, it } from 'vitest'
 import type { IncomingMessage } from 'node:http'
 import { sameOrigin } from '../src/status.ts'
@@ -16,6 +8,7 @@ function request(headers: Record<string, string>): IncomingMessage {
 
 const HOST = '127.0.0.1:19387'
 
+// the app renderer's POSTs are bridged here carrying the dsh-app: origin (or none); cross-site must be refused
 describe('sameOrigin', () => {
   it('accepts the app renderer bridged from the dsh-app scheme', () => {
     expect(sameOrigin(request({ host: HOST, origin: 'dsh-app://app' }))).toBe(true)

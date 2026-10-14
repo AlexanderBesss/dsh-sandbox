@@ -1,9 +1,3 @@
-/**
- * Review-run settlement: the verdict must reach the parent and the child must
- * be disposed. The regression these pin: the route used to fire-and-forget
- * `subagents.start`, so a finished review left its child resident (the lineage
- * view showed it running forever) and the main agent never saw the result.
- */
 import { describe, expect, it } from 'vitest'
 import type { SandboxContext, SubagentResult, SubagentRun, DurableUserMessage } from '../src/context.ts'
 import { settleReviewRun, settlementMessage } from '../src/status.ts'
@@ -44,6 +38,7 @@ function runFor(
   return { run, disposed: () => disposed }
 }
 
+// regression: a finished review used to leave its child resident and the parent without the verdict
 describe('settleReviewRun', () => {
   it('hands the child verdict to an idle parent as a queued followup', async () => {
     const parent = fakeAgent('idle')
@@ -90,7 +85,7 @@ describe('settleReviewRun', () => {
   it('is a no-op when the parent closed while the review ran', async () => {
     const { run, disposed } = runFor(Promise.resolve({ stopReason: 'completed', output: [] }))
     await settleReviewRun(ctxFor(undefined), run, 'gone', 'child-1')
-    expect(disposed()).toBe(true) // disposal still happened
+    expect(disposed()).toBe(true)
   })
 })
 

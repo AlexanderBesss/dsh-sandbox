@@ -1,12 +1,3 @@
-/**
- * Worktree mode: per-session `git worktree` + branch, the merge-request
- * flow, and the archive sweep's prune rules.
- *
- * The fake CLI runner answers the git calls the manager makes and records
- * every argv it saw, mirroring `fakeTransport`'s fake engine: the assertions
- * are about *which commands* the manager runs, not about real git.
- */
-
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,33 +9,20 @@ import { WorktreeManager, compareUrlFor } from '../src/container/worktrees.ts'
 import { testConfig } from './helpers.ts'
 
 interface FakeGitOptions {
-  /** Answer for `rev-parse --show-toplevel`. */
   repoRoot: string
-  /** Fail `rev-parse --show-toplevel` (not a git checkout). */
   notGit?: boolean
-  /** `rev-parse --verify refs/heads/…` succeeds (the branch already exists). */
   branchExists?: boolean
-  /** Answer for `remote get-url origin`; undefined means "no such remote". */
   remote?: string
-  /** Text `status --porcelain` prints ("" means clean). */
   dirty?: string
-  /** `merge-base --is-ancestor` succeeds (the branch is merged). */
   merged?: boolean
-  /** Answer for `rev-list --count HEAD --not --remotes`. */
   unpushed?: string
-  /** Host-effective values answered by `config --get <key>`; unset keys exit 1. */
+  // unset keys exit 1, the way git answers `config --get`
   gitConfig?: Record<string, string>
-  /** Fail every git call with GIT_MISSING (git not on PATH). */
   gitMissing?: boolean
-  /** What the main checkout has checked out (`symbolic-ref --short HEAD`). */
   mainBranch?: string
-  /** Answer for `merge-base HEAD <mainBranch>` — the session branch's fork point. */
   base?: string
-  /** Answer for `log --oneline …`. */
   log?: string
-  /** Answer for `diff --stat …`. */
   stat?: string
-  /** `for-each-ref refs/remotes/origin/…` prints a ref: the branch is public. */
   pushedBranch?: boolean
 }
 
@@ -69,13 +47,13 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
       throw new CliCommandError('bad revision', 'GIT_FAILED', '')
     }
     if (args[0] === 'worktree' && args[1] === 'add') {
-      // Create the directory the way git would, so later existsSync checks see it.
+      // create the directory the way git would, so later existsSync checks see it
       const path = args.includes('-B') ? args[4]! : args[2]!
       mkdirSync(path, { recursive: true })
       return ok()
     }
-    if (args[0] === 'worktree') return ok() // prune / remove
-    if (args[0] === 'branch') return ok() // -D
+    if (args[0] === 'worktree') return ok()
+    if (args[0] === 'branch') return ok()
     if (args[0] === 'status') return ok(options.dirty ?? '')
     if (args[0] === 'rev-list') return ok(`${options.unpushed ?? '0'}\n`)
     if (args[0] === 'remote') {
@@ -94,8 +72,7 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
     if (args[0] === 'log') return ok(`${options.log ?? ''}\n`)
     if (args[0] === 'diff') return ok(`${options.stat ?? ''}\n`)
     if (args[0] === 'for-each-ref') {
-      // Real git has no `--quiet` here and exits 129; the fake keeps that
-      // contract so an unsupported option cannot pass as "no such ref".
+      // real git has no `--quiet` here and exits 129; the fake keeps that contract
       if (args[1] === '--quiet') throw new CliCommandError("unknown option `quiet'", 'GIT_FAILED', "error: unknown option `quiet'")
       return ok(options.pushedBranch === true ? `refs/remotes/origin/${args[args.length - 1]}\n` : '')
     }
@@ -104,7 +81,7 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
       if (value === undefined) throw new CliCommandError('not set', 'GIT_FAILED', '')
       return ok(`${value}\n`)
     }
-    return ok() // push / add / commit and friends
+    return ok()
   }
   const git: CliRunner = {
     runSync: (args) => handle(args),
@@ -124,13 +101,11 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
   return { git, gh, calls }
 }
 
-/** The `--body` the merge button handed `gh pr create`. */
 function createBody(calls: string[][]): string {
   const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
   return create[create.indexOf('--body') + 1]!
 }
 
-/** A throwaway directory to stand in for a repo root, cleaned after the test. */
 function tempRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-wt-'))
   tempRoots.push(dir)
@@ -168,15 +143,12 @@ describe('WorktreeManager.ensure', () => {
     const entry = manager.ensure('session-3', repoRoot)
     const digest = slugDigest('session-3').slice(0, 6)
     expect(entry!.branch).toBe(`dsh-sbx/fix-the-login-crash-${digest}`)
-    // The worktree directory carries the same readable name, and the digest keeps
-    // two chats titled alike (or one chat renamed later) off each other's branch.
+    // the digest keeps two chats titled alike off each other's branch
     expect(entry!.worktreePath).toBe(join(`${repoRoot}.worktrees`, `fix-the-login-crash-${digest}`))
     expect(calls).toContainEqual(['worktree', 'add', '-B', entry!.branch, entry!.worktreePath, 'HEAD'])
   })
 
   it('keeps the session slug when the conversation has no usable name', () => {
-    // No title yet, an empty one, or one with nothing latin-alphanumeric in it:
-    // naming falls back to what it was, not to a branch called `dsh-sbx/-1a2b3c`.
     for (const title of [undefined, '', '   ', '🎉 🚀']) {
       const repoRoot = tempRoot()
       const { git, gh } = fakeCli({ repoRoot })
@@ -229,8 +201,7 @@ describe('WorktreeManager.ensure', () => {
     expect(created).toBeDefined()
     expect(existsSync(join(`${repoRoot}.worktrees`, 'registry.json'))).toBe(true)
 
-    // A fresh manager (the app restarted): the registry answers the lookup,
-    // and no `worktree add` runs for a directory that is still there.
+    // a fresh manager stands in for an app restart: the registry answers, branch still there
     const second = fakeCli({ repoRoot, branchExists: true })
     const found = new WorktreeManager({ git: second.git, gh: second.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
       .lookup('session-3', repoRoot)
@@ -248,8 +219,7 @@ describe('WorktreeManager.ensure', () => {
     const second = fakeCli({ repoRoot, branchExists: true })
     const manager = new WorktreeManager({ git: second.git, gh: second.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
     manager.ensure('session-3', repoRoot)
-    // `add -B` would reset the branch to HEAD and strand the session's
-    // commits; the existing branch must be checked out as-is.
+    // `add -B` would reset the branch to HEAD and strand the session's commits
     expect(second.calls).toContainEqual(['worktree', 'add', entry.worktreePath, 'dsh-sbx/session-3'])
     expect(second.calls.some((call) => call.includes('-B'))).toBe(false)
   })
@@ -288,7 +258,6 @@ describe('WorktreeManager.mergeRequest', () => {
     })
     const result = await manager.mergeRequest('session-3', repoRoot)
     expect(result.prUrl).toBe('https://github.com/o/r/pull/7')
-    // The commit the button writes says what it is in the conversation's words.
     expect(calls.some((call) => call[0] === 'commit' && call[2] === 'dsh-sbx: Fix the login crash')).toBe(true)
     const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
     expect(create[create.indexOf('--head') + 1]).toBe(result.branch)
@@ -329,7 +298,7 @@ describe('WorktreeManager.mergeRequest', () => {
     const result = await manager.mergeRequest('session-3', repoRoot)
     expect(result.renamedFrom).toMatch(/^dsh-sbx\/also-when-we-create-a-branch-[0-9a-f]{6}$/)
     expect(result.branch).toMatch(/^dsh-sbx\/name-branches-from-content-[0-9a-f]{6}$/)
-    // The rename has to precede the push: that is what makes it safe.
+    // the rename has to precede the push: that is what makes it safe
     const renamed = calls.findIndex((call) => call[0] === 'branch' && call[1] === '-m')
     const pushed = calls.findIndex((call) => call[0] === 'push')
     expect(renamed).toBeGreaterThanOrEqual(0)
@@ -337,7 +306,6 @@ describe('WorktreeManager.mergeRequest', () => {
     expect(calls[renamed]![3]).toBe(result.branch)
     expect(pushed).toBeGreaterThan(renamed)
     expect(calls[pushed]).toEqual(['push', '-u', 'origin', result.branch!])
-    // The commit subject and the request both take the child's wording.
     expect(calls.some((call) => call[0] === 'commit' && call[2] === 'dsh-sbx: Name the branch and describe the request from the change')).toBe(true)
     const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
     expect(create[create.indexOf('--head') + 1]).toBe(result.branch)
@@ -359,7 +327,7 @@ describe('WorktreeManager.mergeRequest', () => {
       },
     })
     await manager.mergeRequest('session-3', repoRoot)
-    // One staging feeds the pass; the second catches what was written during it.
+    // one staging feeds the pass; the second catches what was written during it
     expect(stagedWhenAsked).toBe(1)
     expect(calls.filter((call) => call[0] === 'add' && call[1] === '-A')).toHaveLength(2)
   })
@@ -376,7 +344,6 @@ describe('WorktreeManager.mergeRequest', () => {
     expect(calls).toContainEqual(['push', '-u', 'origin', 'dsh-sbx/session-3'])
     expect(result.renamedFrom).toBeUndefined()
     expect(result.nameNote).toContain('already been pushed')
-    // The bullets still describe the request; only the name is refused.
     expect(createBody(calls)).toContain('- a change')
   })
 
@@ -413,8 +380,7 @@ describe('WorktreeManager.mergeRequest', () => {
   })
 
   it('describes the branch against HEAD when its fork point is unknown', async () => {
-    // A detached main checkout yields no merge-base; the request still reports
-    // what the branch carries instead of describing nothing.
+    // a detached main checkout yields no merge-base, so the branch is described against HEAD
     const repoRoot = tempRoot()
     const { git, gh, calls } = fakeCli({ repoRoot, remote: 'git@github.com:o/r.git', log: 'abc1234 work', stat: ' a.ts | 1 +' })
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
@@ -423,7 +389,6 @@ describe('WorktreeManager.mergeRequest', () => {
     const body = create[create.indexOf('--body') + 1]!
     expect(body).toContain("the main checkout's `HEAD`")
     expect(body).toContain('abc1234 work')
-    // No conversation title: a session-named branch is the honest title.
     expect(create[create.indexOf('--title') + 1]).toBe('dsh-sbx/session-3')
   })
 
@@ -491,7 +456,6 @@ describe('WorktreeManager.pruneForArchived', () => {
     expect(removed).toEqual([entry.worktreePath])
     expect(calls).toContainEqual(['worktree', 'remove', entry.worktreePath])
     expect(calls).toContainEqual(['branch', '-D', 'dsh-sbx/session-3'])
-    // The registry no longer names it.
     const registry = JSON.parse(readFileSync(join(`${repoRoot}.worktrees`, 'registry.json'), 'utf8')) as { entries: Record<string, unknown> }
     expect(registry.entries['session-3']).toBeUndefined()
   })
@@ -589,7 +553,6 @@ describe('WorktreeManager subagent aliasing', () => {
     calls.length = 0
     const child = manager.ensure('session-3-child', repoRoot, 'session-3')!
     expect(child.worktreePath).toBe(parent.worktreePath)
-    // No `worktree add` ran for the child, and it owns no registry entry.
     expect(calls.some((args) => args[0] === 'worktree' && args[1] === 'add')).toBe(false)
     expect(manager.lookup('session-3-child', repoRoot)).toBeUndefined()
   })

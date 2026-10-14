@@ -22,16 +22,14 @@ describe('containerNameFor', () => {
   })
 
   it('sanitizes characters a container name cannot carry', () => {
-    // A rewritten slug carries the id's digest, so it is slug + digest, not
-    // the bare slug.
+    // a rewritten slug carries the id's digest: slug + digest, not the bare slug
     const name = containerNameFor('agent/worker 7')
     expect(name.startsWith(`${CONTAINER_PREFIX}agent-worker-7-`)).toBe(true)
     expect(name).toMatch(DOCKER_NAME)
   })
 
   it('separates two ids that sanitize to the same slug', () => {
-    // `Session_42` and `session-42` strip to one slug; without a digest one
-    // chat would run inside the other's box.
+    // `Session_42` and `session-42` strip to one slug; without a digest one chat runs in the other's box
     const upper = containerNameFor('Session_42')
     const plain = containerNameFor('session-42')
     expect(upper).not.toBe(plain)
@@ -56,15 +54,14 @@ describe('containerNameFor', () => {
   })
 
   it('separates two long ids that share a prefix', () => {
-    // Truncating the slug alone would name one container for both chats, and
-    // one conversation would run inside the other's box.
+    // truncating the slug alone would name one container for both chats
     const base = 'x'.repeat(60)
     const first = containerNameFor(`${base}-one`)
     const second = containerNameFor(`${base}-two`)
     expect(first).not.toBe(second)
     expect(first).toMatch(DOCKER_NAME)
     expect(second).toMatch(DOCKER_NAME)
-    // Still readable: the prefix of the conversation id survives.
+    // still readable: the conversation id's prefix survives
     expect(first.startsWith(`${CONTAINER_PREFIX}${base.slice(0, 38)}`)).toBe(true)
   })
 })
@@ -116,8 +113,7 @@ describe('resolveTarget', () => {
 
 describe('targetForSession', () => {
   it('names a conversation with no initiating agent, reading its workspace from the store', () => {
-    // The terminal panel spawns from the UI, where no agent chain is running;
-    // the request already names the conversation, so that is what routes it.
+    // the terminal panel spawns from the UI: the request names the conversation, so that routes it
     const ctx = {
       agents: { currentInitiator: () => undefined },
       sessions: { get: (id: string) => ({ id, header: { cwd: 'F:\\Projects\\stored' } }) },
@@ -131,8 +127,7 @@ describe('targetForSession', () => {
   })
 
   it('moves a session onto its worktree when the manager gives it one', () => {
-    // Worktree mode: the seams mount and read/write the worktree, and the
-    // checkout it was carved from rides along for the UI and the merge flow.
+    // worktree mode: the carved-from checkout rides along for the UI and the merge flow
     const ctx = {
       agents: { currentInitiator: () => undefined },
       sessions: { get: (id: string) => ({ id, header: { cwd: 'F:\\Projects\\stored' } }) },
@@ -158,8 +153,7 @@ describe('targetForSession', () => {
   })
 
   it('keeps the shared workspace when the manager declines one', () => {
-    // Non-git workspace, or a sticky creation failure: the session behaves
-    // exactly as it did before worktree mode existed.
+    // non-git workspace or sticky creation failure: behaves as before worktree mode existed
     const ctx = {
       agents: { currentInitiator: () => undefined },
       sessions: { get: (id: string) => ({ id, header: { cwd: 'F:\\Projects\\stored' } }) },
@@ -185,7 +179,7 @@ describe('titleSlugFor', () => {
 
   it('folds accents, and treats an undecomposable one as a separator', () => {
     expect(titleSlugFor('Café au lait')).toBe('cafe-au-lait')
-    // `ø` has no NFKD decomposition, so it separates rather than becoming `o`.
+    // `ø` has no NFKD decomposition, so it separates rather than becoming `o`
     expect(titleSlugFor('Ünicødé')).toBe('unic-de')
   })
 
@@ -207,8 +201,7 @@ describe('branchSlugFor', () => {
   })
 
   it('separates two conversations that carry the same title', () => {
-    // Two chats named alike would otherwise share one branch, and one chat
-    // would commit onto the other's work.
+    // two chats named alike would otherwise share one branch and commit onto each other's work
     expect(branchSlugFor('Fix the crash', 'session-3')).not.toBe(branchSlugFor('Fix the crash', 'session-4'))
   })
 

@@ -1,14 +1,3 @@
-/**
- * The status route the session header chip reads.
- *
- * The chip has to answer "which container is this chat running in?" without
- * waiting for a tool call, so the plugin exposes one small read-only endpoint
- * over the app's embedded web server. It is same-origin and read-only: it
- * names the container, its state, and its workspace, and nothing else.
- *
- * @module dsh-docker-sandbox/status
- */
-
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { randomUUID } from "node:crypto"
 import type {
@@ -26,7 +15,6 @@ import { containerNameFor, type SandboxTarget } from "./container/session.ts"
 import { SandboxUnavailableError } from "./container/transport.ts"
 import type { WorktreeManager } from "./container/worktrees.ts"
 
-/** One JSON reply, written and closed. HEAD gets headers only. */
 function writeJson(request: IncomingMessage, res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -37,20 +25,7 @@ function writeJson(request: IncomingMessage, res: ServerResponse, status: number
   res.end(request.method === "HEAD" ? undefined : payload)
 }
 
-/**
- * Reject cross-site requests.
- *
- * The comparison is the full host (name *and* port): another app on the same
- * host but a different port is a different origin and gets refused. The app's
- * own renderer lives on the `dsh-app:` scheme and its fetches are bridged to
- * this server carrying that origin (or, depending on the bridge, none), so a
- * `dsh-app:` origin always passes and a missing `Origin` passes as well:
- * browsers attach `Origin` to every POST, so a POST that reaches this route
- * without one came from the bridge or from a local non-browser client - never
- * from a cross-site web page, which is the only thing a CSRF guard can act
- * on. A cross-site web page cannot forge or omit `Origin`, and `Sec-Fetch-Site`
- * is checked first when the client reports it.
- */
+// the app renderer sends a dsh-app: origin or none; a cross-site page cannot omit Origin, so a missing one is local
 export function sameOrigin(request: IncomingMessage): boolean {
   const host = request.headers.host
   if (host === undefined) return false
@@ -66,7 +41,6 @@ export function sameOrigin(request: IncomingMessage): boolean {
   }
 }
 
-/** One line telling the parent how its review child ended. */
 function settlementSummary(stopReason: string | undefined): string {
   const subject = "The code review of this session's worktree"
   switch (stopReason) {
@@ -79,12 +53,7 @@ function settlementSummary(stopReason: string | undefined): string {
   }
 }
 
-/**
- * Build the durable notice that hands a finished review back to the parent,
- * mirroring the app's own settlement notice (`subagent-settled`): a summary
- * line plus the child's closing text, shaped as a user message the Agent
- * inbox accepts.
- */
+// mirrors the app's own settlement notice (subagent-settled), shaped as a user message the Agent inbox accepts
 export function settlementMessage(childId: string, result: SubagentResult | undefined): DurableUserMessage {
   const summary = settlementSummary(result?.stopReason)
   const closing = (result?.output ?? []).filter(
@@ -103,15 +72,7 @@ export function settlementMessage(childId: string, result: SubagentResult | unde
   }
 }
 
-/**
- * Consume one review run the way the app's own delegation tool does: wait for
- * the child to settle, dispose it (a run nobody settles leaves its child
- * resident, which is what keeps the lineage view showing a finished review as
- * still running), then hand the verdict to the parent - queued when the
- * parent is idle, steered into its in-flight turn when it is not. Every step
- * is contained: this must never reject, because an unhandled rejection here
- * is an uncaught exception in the host.
- */
+// must never reject (unhandled = uncaught in the host); settle and dispose the run or its child stays resident
 export async function settleReviewRun(
   ctx: SandboxContext,
   run: SubagentRun,
@@ -127,16 +88,16 @@ export async function settleReviewRun(
   try {
     await run.dispose?.()
   } catch {
-    // Disposal failure must not cost the parent its verdict.
+    // disposal failure must not cost the parent its verdict
   }
   try {
     const parent = ctx.agents?.get?.(sessionId)
-    if (parent === undefined) return // the parent closed while the review ran
+    if (parent === undefined) return
     const message = settlementMessage(childId, result)
     if (parent.status === "running" && parent.steer !== undefined) parent.steer(message)
     else parent.followup?.(message)
   } catch {
-    // Nothing to deliver to; the review still ran and its log stands.
+    // nothing to deliver to; the review still ran and its log stands
   }
 }
 
@@ -145,11 +106,10 @@ export interface StatusDeps {
   paths: PathMapper
   config: SandboxConfig
   worktrees?: WorktreeManager
-  /** The subagent service, once the deferred inject has seen it. */
+  // thunk: the deferred inject may fill it only after registration
   subagents?: () => SubagentService | undefined
 }
 
-/** Register `/sandbox/api/*` and dispose it with the plugin fiber. */
 export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void {
   ctx.effect(() => ctx.webServer.register({
     kind: "prefix",
@@ -177,12 +137,10 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
           writeJson(request, response, 400, { ok: false, error: { code: "bad-request", message: "a session id is required" } })
           return
         }
-        // The workspace comes from the session store, not the request: the chip
-        // must not be able to ask about an arbitrary directory.
+        // the workspace comes from the session store, not the request: the chip must not ask about an arbitrary directory
         const headerCwd = ctx.sessions?.get?.(sessionId)?.header?.cwd
         const workspace = typeof headerCwd === "string" && headerCwd !== "" ? headerCwd : deps.config.workspaceRoot
-        // The raw checkout, not the worktree: the provisioner reports the
-        // container it actually has, and the worktree rides along below.
+        // the raw checkout, not the worktree: the provisioner reports the container it has; the worktree rides along below
         const target: SandboxTarget = {
           sessionId,
           container: containerNameFor(sessionId),
@@ -252,10 +210,7 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
             })
             return
           }
-          // `start` resolves when the child's inbox accepts the prompt, not
-          // when the review finishes. Settle the run in the background: the
-          // verdict reaches the parent as a settlement notice and the child is
-          // disposed, exactly like the app's own background delegation.
+          // start resolves at inbox acceptance, not review completion — settle the run in the background, like app delegation
           const run = await subagents.start(provider, {
             prompt: [{ type: "text", text: buildReviewPrompt(bundle.entry, bundle.changes) }],
             parent,
@@ -270,7 +225,7 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
           })
           return
         }
-        // Read-only peek: opening a chat never runs `git worktree add`.
+        // read-only peek: opening a chat never runs `git worktree add`
         const worktree = await deps.worktrees?.info(sessionId, workspace)
         const worktreeError = deps.worktrees?.failureFor(sessionId)
         writeJson(request, response, 200, {

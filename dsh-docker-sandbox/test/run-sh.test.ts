@@ -1,23 +1,14 @@
-/**
- * The in-container command runner.
- *
- * The signaler in `subprocess.ts` depends on the exact pidfile path the runner
- * writes, and on the setsid branch making the recorded pid the process group
- * id. These checks pin that contract from the script text; the live behaviour
- * is covered by `test/integration/docker.test.ts`.
- */
-
 import { readFile } from 'node:fs/promises'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 let script = ''
 
 beforeAll(async () => {
-  // Normalise like `uploadAgents` does, so a CRLF checkout cannot skew the
-  // line-oriented checks below.
+  // normalise like `uploadAgents` does, so a CRLF checkout cannot skew the line checks
   script = (await readFile(new URL('../agent/run.sh', import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
 })
 
+// the signaler in subprocess.ts depends on the exact pidfile path and the setsid process group
 describe('agent/run.sh', () => {
   it('records the pid under the path the signaler reads', () => {
     expect(script).toContain('pidfile=/tmp/.dsh-pid-$op')

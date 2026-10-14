@@ -1,17 +1,7 @@
-/**
- * Bounded retained output with absolute-offset reads.
- *
- * The subprocess seam keeps a capped tail of each stream so callers that
- * await (rather than stream) can still read what the command printed, and
- * job-output pumps can advance a cursor through it. The tail drops from the
- * front once the cap is hit and reports the loss on every read.
- *
- * @module dsh-docker-sandbox/utils/output-tail
- */
+// capped tail: drops from the front at the cap and reports the loss on every read
 
 import type { OutputTail as SeamOutputTail } from "@deepseek-ai/dsh-subprocess"
 
-/** Bounded retained output with absolute-offset reads. */
 export class OutputTail {
   private chunks: Buffer[] = []
   private startOffset = 0
@@ -50,14 +40,7 @@ export class OutputTail {
     return this.readFrom(this.startOffset)?.text ?? ""
   }
 
-  /**
-   * Read from an absolute offset. A collected stream always answers — an
-   * empty stream reads as empty text, not as "no stream": the shipped search
-   * provider treats an `undefined` read as "the command produced no collected
-   * output streams", which would fail every ripgrep run whose stderr is empty
-   * (that is, nearly all of them). `nextOffset` mirrors the shipped collector
-   * so job output pumps can advance their cursor.
-   */
+  // never undefined: the search provider reads undefined as "no output", failing ripgrep runs with empty stderr
   readFrom(offset: number): { text: string; nextOffset: number; lossy: boolean } {
     const from = Math.max(offset, this.startOffset)
     const lossy = this.dropped || offset < this.startOffset
@@ -71,7 +54,6 @@ export class OutputTail {
   }
 }
 
-/** Adapt the internal tail to the seam's read shape. */
 export function tailView(tail: OutputTail): SeamOutputTail {
   return {
     readFrom: (offset: number) => tail.readFrom(offset),

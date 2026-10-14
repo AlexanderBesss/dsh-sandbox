@@ -1,22 +1,5 @@
-/**
- * The `shell` terminal backend, running inside the conversation's container.
- *
- * The terminal panel keeps a persistent shell per session, so `cd` in one send
- * is still in effect in the next. Without a PTY there is no prompt and no
- * Ctrl-C, so completion is detected with a sentinel: each send is followed by
- * `printf '\n__DSH_DONE_<n>__ %s\n' "$?"`, and the session settles when that
- * line comes back. This is the same trick the shipped bash backend uses to
- * decide that a command has finished, and it is what makes the viewport text
- * trustworthy rather than a guess from a quiet period.
- *
- * Signals reach the session shell's recorded process group through the same
- * `agent/run.sh` runner the shell tool uses, so `signal()` works with or
- * without a PTY for the standard stop signals. Closing a session signals the
- * group too, escalating to KILL after `graceMs` — killing only the local
- * `docker` client would leave the command running in the container.
- *
- * @module dsh-docker-sandbox/seams/terminal
- */
+// no PTY, so completion is detected with a sentinel line per send — the same trick the shipped
+// bash backend uses; signals reach the session shell's process group through the run.sh runner
 
 import type { SandboxContext } from "../context.ts"
 import { TerminalError, type TerminalBackend, type TerminalBackendSession, type TerminalSendOperation, type TerminalWaitReason } from "@deepseek-ai/dsh-terminal"
@@ -28,31 +11,23 @@ import { signalProcessGroup, type ProcessGroupSignal } from "../container/proces
 import { type DockerTransport, type LiveProcess } from "../container/transport.ts"
 import type { WorktreeManager } from "../container/worktrees.ts"
 
-/** Rolling transcript cap per session. */
 const TRANSCRIPT_CAP = 200_000
 
-/** Distinguishes the pidfiles of terminal sessions in one container. */
 let terminalOpSeq = 0
 
-/**
- * Per-process nonce: `terminalOpSeq` restarts at 1 after a plugin reload, and
- * a session shell from the previous fiber can still hold a reused container;
- * the nonce keeps the new fiber's signals off the old shell's process group.
- */
+// opSeq restarts at 1 on plugin reload while an old session shell can still hold a reused
+// container; the nonce keeps the new fiber's signals off the old shell's process group
 const OP_NONCE = Math.random().toString(36).slice(2, 8)
 
-/** The completion sentinel, as it appears on an output line. */
 const MARKER_PATTERN = /^__DSH_DONE_(\d+)__ (\d+|null)$/
 
 interface PendingSend {
-  /** The send this marker belongs to; a marker for another one is noise. */
   seq: number
   delta: string[]
   truncated: boolean
   settle: (reason: TerminalWaitReason, exitCode: number | null) => void
   settled: boolean
   timer?: NodeJS.Timeout
-  /** The caller's abort listener, detached once this send settles. */
   abortSignal?: AbortSignal
   abortListener?: () => void
 }
@@ -63,9 +38,7 @@ class ContainerTerminalSession implements TerminalBackendSession {
   private pending: PendingSend | undefined
   private sendSeq = 0
   private closed = false
-  /** The runner op id whose pidfile records this session shell's process group. */
   private readonly runnerOp = `dsh-t${OP_NONCE}${++terminalOpSeq}`
-  /** Keeps the container alive while this session holds it. */
   private releaseWork: (() => void) | undefined
 
   constructor(
@@ -89,16 +62,13 @@ class ContainerTerminalSession implements TerminalBackendSession {
   }
 
   async start(): Promise<void> {
-    // A terminal session is long-lived work: without a lease, the GC sweep
-    // would reclaim the container out from under a shell that is simply idle
-    // on screen (or busy running a dev server).
+    // long-lived work: without a lease the GC sweep would reclaim the container out from under
+    // an idle (or busy) terminal session
     this.releaseWork = this.provisioner.beginWork(this.target.sessionId)
     try {
       await this.provisioner.ensure(this.target)
-      // The shell runs through the command runner so `close()` can stop the
-      // command it started: killing the local `docker` client does not stop
-      // the process inside the container. The runner also `cd`s to the
-      // session's container cwd before starting the shell.
+      // run through the command runner so close() can stop the command: killing the local
+      // docker client does not stop the process in the container; the runner also cd's to cwd
       const live = this.transport.spawnInContainer(this.target, [
         "/bin/sh",
         "/tmp/.dsh-run.sh",
@@ -108,8 +78,7 @@ class ContainerTerminalSession implements TerminalBackendSession {
       ], { pty: this.config.terminalPty === true })
       this.live = live
       live.child.stdin.on("error", () => {
-        // The session's shell may be gone by the time a send flushes to it; the
-        // exit handler below reports that as a settled session.
+        // the shell may be gone by the time a send flushes; the exit handler reports that as settled
       })
       for (const stream of [live.child.stdout, live.child.stderr] as NodeJS.ReadableStream[]) {
         stream.setEncoding("utf8")
@@ -127,27 +96,22 @@ class ContainerTerminalSession implements TerminalBackendSession {
         this.settlePending("session_exit", null)
       })
     } catch (error) {
-      // A failed start must not leak the lease: nothing is running, and a
-      // stuck lease would exempt the container from the idle GC forever.
+      // a failed start must not leak the lease: a stuck lease exempts the container from idle GC forever
       this.releaseWork?.()
       this.releaseWork = undefined
       throw error
     }
   }
 
-  /** Route one output line to the pending send, or to the idle transcript. */
   private ingest(line: string): void {
     const marker = MARKER_PATTERN.exec(line)
     const pending = this.pending
     if (marker !== null) {
-      // A marker for any other send — one this session already stopped waiting
-      // on after a timeout or an abort — is protocol noise. It must not reach a
-      // viewport, and it must not be mistaken for the current send's verdict.
+      // a marker for a send already stopped waiting on is protocol noise: not a verdict, not viewport content
       if (pending !== undefined && !pending.settled && marker[1] === String(pending.seq)) {
         this.settlePending("stdin_read", marker[2] === "null" ? null : Number(marker[2]), pending)
       }
-      // The sentinel is protocol, not output: like the delta, it never reaches
-      // the transcript the panel reads back.
+      // the sentinel is protocol, not output: it never reaches the transcript either
       return
     }
     if (pending !== undefined && !pending.settled) {
@@ -156,13 +120,7 @@ class ContainerTerminalSession implements TerminalBackendSession {
     this.transcript = (this.transcript + line + "\n").slice(-TRANSCRIPT_CAP)
   }
 
-  /**
-   * Settle one specific send.
-   *
-   * The target is explicit, never "whatever is pending now": a late timer or a
-   * stale abort signal from a send that already finished must not settle the
-   * send that happens to be running.
-   */
+  // settles an explicit send, never "whatever is pending": a late timer or stale abort must not settle the running send
   private settlePending(reason: TerminalWaitReason, exitCode: number | null, pending: PendingSend | undefined = this.pending): void {
     if (pending === undefined || pending !== this.pending || pending.settled) return
     pending.settled = true
@@ -178,10 +136,7 @@ class ContainerTerminalSession implements TerminalBackendSession {
     if (!live || this.closed) {
       throw new TerminalError("the sandbox terminal session has already exited", "TERMINAL_EXITED")
     }
-    // A send must not be dropped unsettled: its timer and abort listener would
-    // otherwise outlive it and settle whatever send runs next. The service
-    // contract makes sends exclusive, so this only fires on a caller that
-    // abandoned one; settle it before starting the new one.
+    // settle any abandoned send first: its timer and abort listener would otherwise settle the next one
     this.settlePending("timeout", null)
     const seq = ++this.sendSeq
     const timeoutMs = Math.min(request.timeoutMs ?? this.config.timeoutMs.get(), this.config.maxTimeoutMs.get())
@@ -263,7 +218,6 @@ class ContainerTerminalSession implements TerminalBackendSession {
     }
   }
 
-  /** Signals the terminal service may deliver, mapped onto the recorded group. */
   private static readonly SIGNAL_WHITELIST: ReadonlySet<ProcessGroupSignal> = new Set([
     "HUP", "INT", "QUIT", "TERM", "USR1", "USR2", "KILL",
   ])
@@ -280,10 +234,7 @@ class ContainerTerminalSession implements TerminalBackendSession {
     if (this.live === undefined || this.closed) {
       throw new TerminalError("the terminal session is no longer running", "TERMINAL_EXITED")
     }
-    // The session shell runs through the runner, so its process group is
-    // recorded; a group signal reaches the shell and the command it is running,
-    // with or without a PTY. The pidfile stays in place: the session lives on
-    // after a signal, and its next signal (and its close) needs the group.
+    // group signal reaches the shell and its command, with or without a PTY; keep the pidfile — the session lives on and needs the group for its next signal and its close
     const signaled = await signalProcessGroup(
       this.transport,
       this.target,
@@ -300,10 +251,7 @@ class ContainerTerminalSession implements TerminalBackendSession {
   async close(): Promise<void> {
     this.closed = true
     this.settlePending("session_exit", null)
-    // Stop the command the session started, not just the local client: the
-    // shell runs through the runner, so its process group is recorded. TERM
-    // first; a shell that ignores it gets KILL after the grace period, the
-    // same escalation the subprocess runtime applies.
+    // stop the command, not just the local client: TERM first, KILL after the grace period
     const live = this.live
     if (live !== undefined) {
       await signalProcessGroup(this.transport, this.target, this.runnerOp, "TERM", { waitForPidfileMs: 1500 })
@@ -335,14 +283,7 @@ export interface TerminalDeps {
   worktrees?: WorktreeManager
 }
 
-/**
- * The backend this plugin registers for the `shell` terminal type.
- *
- * The conversation comes from the spawn request, not from the initiating agent:
- * a terminal is usually opened from the UI, where no agent chain is running, so
- * resolving through `agents` would either fail the spawn or — worse, with
- * `allowAgentless` on — put every chat's terminal in one shared container.
- */
+// the conversation comes from the spawn request, not the agent chain: terminals open from the UI, and resolving through agents would put every chat's terminal in one shared container
 export function createShellBackend(ctx: SandboxContext, deps: TerminalDeps): TerminalBackend {
   return {
     type: "shell",

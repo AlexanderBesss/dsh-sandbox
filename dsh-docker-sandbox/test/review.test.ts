@@ -1,11 +1,3 @@
-/**
- * Session review: the collected changes and the reviewer's prompt.
- *
- * The fake CLI runner answers the git calls `collectChanges` makes, so the
- * assertions cover which diff the reviewer would see (fork-point diff,
- * fallbacks when the main checkout is detached, truncation) without real git.
- */
-
 import { describe, expect, it } from 'vitest'
 import type { CliResult, CliRunner } from '../src/container/git.ts'
 import { CliCommandError } from '../src/container/git.ts'
@@ -13,15 +5,10 @@ import { MAX_DIFF_CHARS, buildReviewPrompt, changesAreEmpty, collectChanges } fr
 import type { WorktreeEntry } from '../src/container/worktrees.ts'
 
 interface FakeGitOptions {
-  /** Answer for `symbolic-ref --short HEAD` in the main checkout (undefined = detached). */
   mainBranch?: string
-  /** Answer for `merge-base HEAD <branch>` (undefined = fails). */
   mergeBase?: string
-  /** Text `diff <base>` prints. */
   diff?: string
-  /** Text `log --oneline` prints. */
   log?: string
-  /** Text `status --porcelain` prints. */
   status?: string
 }
 

@@ -1,13 +1,3 @@
-/**
- * The merge flow against a real git, in a throwaway repository with a
- * file-path `origin`.
- *
- * The unit suite drives a fake CLI, which answers any argument list — so an
- * option git does not accept (`for-each-ref --quiet`) reads as success there
- * and fails in the field. This file is the guard for the argument shapes and
- * for the ordering the rename depends on: `branch -m` before `push`.
- */
-
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -36,7 +26,6 @@ afterAll(() => {
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd }).toString().trimEnd()
 
-/** A throwaway repo with a file-path `origin`, both on `main`, one commit seeded. */
 function seededRepo(): { origin: string; repo: string } {
   const base = mkdtempSync(join(tmpdir(), 'dsh-real-git-'))
   roots.push(base)
@@ -62,6 +51,7 @@ const ghAnswering = (url: string, calls?: string[][]) => ({
   },
 })
 
+// the unit suite's fake CLI answers any argv: this pins argument shapes and rename-before-push against real git
 describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => {
   it('renames the branch before pushing it, and describes the change', async () => {
     const { origin, repo } = seededRepo()
@@ -94,22 +84,18 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
     const create = ghCalls.find((args) => args[0] === 'pr')!
     const body = create[create.indexOf('--body') + 1]!
 
-    // The branch the world sees is the one named after the change.
     expect(result.renamedFrom).toBe(created)
     expect(result.branch).toMatch(/^dsh-sbx\/refuse-turn-when-engine-down-[0-9a-f]{6}$/)
     expect(git(repo, 'branch', '--format=%(refname:short)')).not.toContain(created)
     expect(git(origin, 'branch')).toContain(result.branch!)
     expect(git(origin, 'branch')).not.toContain(created)
-    // The worktree follows the rename; its directory does not move, because the
-    // container has it mounted.
+    // the directory must not move on rename: the container has it mounted
     expect(git(result.worktreePath, 'branch', '--show-current')).toBe(result.branch)
     expect(git(repo, 'worktree', 'list')).toContain(entry!.worktreePath.replace(/\\/g, '/'))
 
     expect(create[create.indexOf('--head') + 1]).toBe(result.branch)
     expect(create[create.indexOf('--title') + 1]).toBe('Refuse the turn when the engine is down')
     expect(git(result.worktreePath, 'log', '--format=%s', '-1')).toBe('dsh-sbx: Refuse the turn when the engine is down')
-    // The description carries the AI bullets, the commit the button wrote, and
-    // the diffstat — collected in that order, above the git evidence.
     expect(body).toContain('## Summary\n\n- Worktree mode fails the turn')
     expect(body).toContain('## Commits (1)')
     expect(body).toContain('dsh-sbx: Refuse the turn when the engine is down')
@@ -133,7 +119,7 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
     const first = await manager.mergeRequest('session-3', repo)
     expect(first.renamedFrom).toBeDefined()
     writeFileSync(join(first.worktreePath, 'more.ts'), 'export const more = 1\n')
-    // Second click: the branch is on origin now, so its name is public.
+    // second click: the branch is on origin now, so its name is public
     const second = await manager.mergeRequest('session-3', repo)
     expect(second.branch).toBe(first.branch)
     expect(second.renamedFrom).toBeUndefined()
@@ -144,8 +130,7 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
   it('commits what the naming pass itself wrote into the worktree', async () => {
     const { repo } = seededRepo()
 
-    // Stands in for a child that "helps": it edits after the first staging,
-    // which is why the button stages again before it commits.
+    // stands in for a child that "helps": it edits after the first staging, so the button stages again
     const brief = async (_sessionId: string, facts: PullRequestFacts) => {
       writeFileSync(join(facts.worktreePath, 'late.ts'), 'export const late = 1\n')
       return { brief: { bullets: ['- a change'] } }

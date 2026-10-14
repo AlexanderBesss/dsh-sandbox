@@ -1,22 +1,5 @@
-/**
- * One container per conversation.
- *
- * The provisioner owns the container lifecycle: it creates a container on
- * first use (`docker run -d`), keeps it Running for the life of the chat, and
- * deletes containers that have gone idle. Containers are plain named
- * containers — the identity that matters is *a name a human can read in the
- * app*, the container this chat is running in — and ownership is tracked with
- * the `dsh.sandbox=1` label plus a `dsh.session` label, which is what the GC
- * loop and the status route filter on.
- *
- * The workspace is a bind mount of the Windows workspace itself: Docker
- * Desktop shares drives into its VM natively, so the mount is the same bytes
- * the host file tools see — a file written by a container command shows up in
- * Windows Explorer and a file written in an editor shows up inside the
- * container.
- *
- * @module dsh-docker-sandbox/container/provisioner
- */
+// ownership is the dsh.sandbox=1 + dsh.session labels — the GC loop and status route filter on them
+// Docker Desktop shares host drives into its VM natively, so the workspace bind mount is the same bytes the host sees
 
 import { mkdirSync } from "node:fs"
 import { BootstrapLogger, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
@@ -26,30 +9,21 @@ import { containerNameFor, COMPOSE_PROJECT_LABEL, CONTAINER_PREFIX, composeProje
 import { DockerTransport, failureDetail, isMissingContainerError, SandboxUnavailableError } from "./transport.ts"
 import type { WorktreeInfo } from "./worktrees.ts"
 
-/** What the UI and the status route need to know about one sandbox. */
 export interface SandboxStatus {
   container: string
   image: string
-  /** Container state as the engine reports it, or `absent` / `unknown`. */
   phase: string
   ready: boolean
-  /** Windows path of the bind-mounted workspace. */
+  // Windows path of the bind-mounted workspace
   workspace: string
-  /** Container path that workspace appears at. */
   containerWorkspace: string
-  /** Engine-side creation time (ISO), when the container exists. */
   createdAt?: string
-  /** Epoch millis of the last call routed to this container. */
   lastUsedAt: number
-  /** Last provisioning failure, kept so the UI can show why. */
   error?: string
-  /** This session's git worktree, when worktree mode gave it one. */
   worktree?: WorktreeInfo
-  /** Why worktree creation failed, when it did. */
   worktreeError?: string
 }
 
-/** A container as `docker inspect` reports it, narrowed to the fields used here. */
 interface ContainerInspect {
   Name?: string
   Created?: string
@@ -57,69 +31,38 @@ interface ContainerInspect {
   Config?: { Image?: string; Labels?: Record<string, string> }
 }
 
-/** Host facts the provisioner consults before reclaiming a container. */
 export interface ProvisionerHooks {
-  /**
-   * True when the app still holds this conversation open.
-   *
-   * A container the engine still carries for a live chat is not an orphan even
-   * when this process never provisioned it — a plugin reload clears the
-   * in-memory bookkeeping, and reclaiming then would pull the box out from
-   * under a chat the user is looking at.
-   */
+  // reclaiming a live chat's container pulls the box out from under the user; true after a plugin reload cleared bookkeeping
   isSessionLive?(sessionId: string): boolean
-  /**
-   * True when the app has archived this conversation.
-   *
-   * An archived chat is not coming back until the user unarchives it, so a
-   * call naming one is stale (a header that outlived the chat, a replay, a
-   * race with the archive): refuse to raise a container for it rather than
-   * leave an unowned box behind for the TTL to clean up.
-   */
+  // a stale caller (header outliving the chat, a replay) must not raise a container for an archived chat
   isSessionArchived?(sessionId: string): boolean
-  /**
-   * A conversation's container just became usable — created or re-attached,
-   * bootstrap done, once per container per process. Owners of follow-on work
-   * (the worktree warm install) kick it here. Fire-and-forget: the
-   * provisioner never awaits the answer.
-   */
+  // fires once per container per process, fire-and-forget, never awaited
   onContainerReady?(target: SandboxTarget): void
 }
 
-/** Fold a mount into one `docker run -v` argument. */
 function volumeArg(mount: SandboxMount): string {
-  // Docker on Windows accepts forward slashes in the host part, and they
-  // survive spaces (the argument is passed as one argv entry, never through
-  // a shell).
+  // Docker on Windows accepts forward slashes in the host part; argv never passes a shell, so spaces survive
   return `${mount.hostPath.replace(/\\/g, "/")}:${mount.containerPath}`
 }
 
-/** Map the engine's lower-case state to the phase name the UI shows. */
 function phaseOfState(state: string): string {
   if (state === "") return "unknown"
   return state[0]!.toUpperCase() + state.slice(1)
 }
 
-/** The session id a sandbox container name was derived from, best effort. */
 function sessionFromName(name: string): string {
   return name.startsWith(CONTAINER_PREFIX) ? name.slice(CONTAINER_PREFIX.length) : name
 }
 
-/** A cancelled wait for a container. */
 function cancelled(target: SandboxTarget): SandboxUnavailableError {
   return new SandboxUnavailableError(`provisioning ${target.container} was cancelled`, "EXEC_FAILED")
 }
 
 export class Provisioner {
-  /** Per-conversation bookkeeping, keyed by session id. */
   private readonly tracked = new Map<string, { target: SandboxTarget; lastUsedAt: number; bootstrapped: boolean }>()
-  /** In-flight provisioning, so concurrent tool calls share one container creation. */
   private readonly inflight = new Map<string, Promise<SandboxTarget>>()
-  /** Last provisioning error, surfaced to the UI. */
   private readonly errors = new Map<string, string>()
-  /** Cached answer to the engine-wide reachability probe (see `engineReachable`). */
   private engineProbe: { at: number; reachable: boolean; error?: string } | undefined
-  /** Conversations with work still running; their containers are never idle. */
   private readonly activeWork = new Map<string, number>()
 
   constructor(
@@ -130,7 +73,6 @@ export class Provisioner {
     private readonly hooks: ProvisionerHooks = {},
   ) {}
 
-  /** Build the `docker run` argv for one conversation. */
   runArgs(target: SandboxTarget): string[] {
     const mounts = this.paths.mountsFor(target.workspace)
     const args: string[] = [
@@ -149,19 +91,12 @@ export class Provisioner {
       this.paths.containerRoot(target.workspace),
     ]
 
-    // One shared npm cache for every sandbox container. The cache is
-    // platform-neutral tarballs, so sharing it is safe across chats and
-    // across the host/container boundary, and it outlives the container
-    // (whose writable layer — and default cache — dies with it).
+    // the npm cache is platform-neutral tarballs, safe to share; a container's own cache dies with its writable layer
     if (this.config.npmCacheHost !== "") {
       args.push("-v", volumeArg({ hostPath: this.config.npmCacheHost, containerPath: "/root/.npm" }))
     }
 
-    // A worktree session's gitdir lives in the main repo's `.git` (mounted
-    // above at its drive form). `GIT_DIR`/`GIT_WORK_TREE` stop git from
-    // following the worktree's `.git` file — a Windows path the container
-    // cannot resolve — and pin every git call in this box to this session's
-    // worktree.
+    // the .git file holds a Windows path the container can't resolve; GIT_DIR/GIT_WORK_TREE pin git to the mounted gitdir
     const extra = this.paths.extraMountFor(target.workspace)
     if (extra !== undefined) {
       args.push(
@@ -170,10 +105,7 @@ export class Provisioner {
         "-e",
         `GIT_WORK_TREE=${this.paths.containerRoot(target.workspace)}`,
       )
-      // Mirror the host's effective git settings (autocrlf, identity) into
-      // the container: Git for Windows keeps them in a system config the
-      // container cannot see, and without them container git reads a CRLF
-      // checkout as phantom-modified.
+      // Git for Windows keeps autocrlf/identity in a config the container can't see; without them, phantom CRLF diffs
       const mirrored = Object.entries(extra.gitConfig)
       if (mirrored.length > 0) {
         args.push("-e", `GIT_CONFIG_COUNT=${mirrored.length}`)
@@ -195,14 +127,7 @@ export class Provisioner {
     return args
   }
 
-  /**
-   * Refuse to raise a container for a conversation the app has archived or
-   * already dropped. A dead id reaching this far means a stale caller (a
-   * session disposed mid-flight, or a header that outlived its chat); the
-   * shared agentless container is exempt because it belongs to no chat. The
-   * hooks answer only when the app actually reports the session, so an
-   * unwired hook never blocks provisioning.
-   */
+  // the agentless container belongs to no chat, so it is exempt; an unwired hook never blocks
   private assertProvisionable(sessionId: string): void {
     if (sessionId === DEFAULT_SESSION_ID) return
     if (this.hooks.isSessionArchived?.(sessionId) === true) {
@@ -213,18 +138,6 @@ export class Provisioner {
     }
   }
 
-  /**
-   * Make sure the conversation's container exists and is Running.
-   *
-   * Idempotent and concurrent-safe: parallel tool calls in one chat share a
-   * single provisioning run, and a chat whose container was deleted (engine
-   * restart, manual `docker rm`) is re-provisioned on the next call.
-   *
-   * @param target - the conversation to provision for.
-   * @param opts.signal - caller cancellation; it stops *this* caller waiting,
-   *   it does not cancel the shared provisioning run (see `awaitProvisioning`).
-   * @returns the same target, now backed by a Running container.
-   */
   async ensure(target: SandboxTarget, opts: { signal?: AbortSignal } = {}): Promise<SandboxTarget> {
     this.assertProvisionable(target.sessionId)
     const entry = this.tracked.get(target.sessionId)
@@ -233,16 +146,11 @@ export class Provisioner {
 
     const running = this.inflight.get(target.sessionId)
     if (running !== undefined) return await this.awaitProvisioning(running, target, opts.signal)
-    // A joiner above shares the in-flight run, which was built from the *first*
-    // caller's target: if a second caller's workspace differs (a session header
-    // changed mid-flight), the first caller's mount wins for this round. The
-    // next call after the header settles provisions against the new workspace.
+    // the in-flight run uses the first caller's target: a later caller's differing workspace loses this round
 
     const run = this.provision(target)
     this.inflight.set(target.sessionId, run)
-    // The entry outlives the caller that started it: a caller who stops waiting
-    // must not leave the next one starting a second `docker run` for the same
-    // name while the first is still in flight.
+    // the run settles on its own result: a caller who stops waiting must not let a second docker run start for the same name
     const settle = (): void => {
       if (this.inflight.get(target.sessionId) === run) this.inflight.delete(target.sessionId)
     }
@@ -250,15 +158,7 @@ export class Provisioner {
     return await this.awaitProvisioning(run, target, opts.signal)
   }
 
-  /**
-   * Wait for a provisioning run without owning it.
-   *
-   * Provisioning creates a container the whole chat shares, so one caller
-   * walking away must not cancel the others: a chat with two parallel tool
-   * calls would fail the second one because the user cancelled the first. A
-   * cancelled caller stops waiting; the run finishes on its own, and anything
-   * it created that nobody used is reclaimed by the GC sweep.
-   */
+  // cancellation stops only this caller: the run is shared by the chat, and one caller cancelling must not fail the others
   private awaitProvisioning(
     run: Promise<SandboxTarget>,
     target: SandboxTarget,
@@ -286,9 +186,7 @@ export class Provisioner {
     const existing = await this.inspectState(target)
 
     if (existing.state !== undefined && existing.owned !== true) {
-      // The name is held by a container this plugin does not own. Adopting it
-      // would run this chat's commands inside someone else's container;
-      // recreating it would delete their work. Refuse and say which.
+      // adopting it would run this chat in someone else's container; recreating it would delete their work
       const detail = `the container name "${target.container}" is already used by a container this plugin does not own`
       this.errors.set(target.sessionId, detail)
       throw new SandboxUnavailableError(
@@ -303,20 +201,15 @@ export class Provisioner {
       return target
     }
     if (existing.state !== undefined) {
-      // Exists but not Running: crashed entrypoint, manual stop, or an engine
-      // restart that left it Exited. Recreate it fresh.
       await this.remove(target)
     }
 
-    // Docker would create a missing volume source itself, but as a VM-side
-    // path; making the host directory first keeps the shared cache a real
-    // host directory the user can inspect and clear.
+    // docker creates a missing -v source itself, but as a VM-side path; mkdir keeps it a real host directory
     if (this.config.npmCacheHost !== "") {
       try {
         mkdirSync(this.config.npmCacheHost, { recursive: true })
       } catch {
-        // A read-only home or a race: `docker run` still answers, and the
-        // cache is an optimization, not a correctness requirement.
+        // the cache is an optimization, not a correctness requirement: docker run still answers without it
       }
     }
 
@@ -346,7 +239,6 @@ export class Provisioner {
     return target
   }
 
-  /** Poll until the engine reports the container Running, or the budget runs out. */
   private async waitRunning(target: SandboxTarget): Promise<void> {
     const deadline = Date.now() + this.config.provisionTimeoutMs
     while (Date.now() < deadline) {
@@ -361,17 +253,9 @@ export class Provisioner {
     throw new SandboxUnavailableError(`timed out waiting for "${target.container}" to be Running`, "EXEC_TIMEOUT")
   }
 
-  /**
-   * Container state and whether the engine still carries our ownership label.
-   *
-   * The label is read in the same round trip as the state: a container that
-   * merely shares our name is not ours to use.
-   */
   private async inspectState(target: SandboxTarget): Promise<{ state?: string; owned?: boolean }> {
     try {
-      // `{{.Config.Labels}}` renders as `map[dsh.sandbox:1 dsh.session:…]`.
-      // Reading the rendered map keeps the format string free of quotes, which
-      // Windows argv quoting would otherwise have to survive.
+      // reading the rendered label map keeps the format string quote-free: Windows argv quoting would not survive quotes
       const result = await this.transport.docker(
         ["inspect", "--format", "{{.State.Status}}|{{.Config.Labels}}", target.container],
         { timeoutMs: 30000 },
@@ -386,19 +270,10 @@ export class Provisioner {
     }
   }
 
-  /** Current container state, or undefined when the container does not exist. */
   async stateOf(target: SandboxTarget): Promise<string | undefined> {
     return (await this.inspectState(target)).state
   }
 
-  /**
-   * Whether the Docker engine answers at all.
-   *
-   * Provisioning failures are per-conversation; this is the engine-wide
-   * question the turn gate asks before letting a worktree-mode chat run. One
-   * `docker version` answers it, cached for `maxAgeMs` so a busy chat does
-   * not spawn a probe per step.
-   */
   async engineReachable(maxAgeMs = 10000): Promise<{ reachable: boolean; error?: string }> {
     const now = Date.now()
     if (this.engineProbe !== undefined && now - this.engineProbe.at < maxAgeMs) return this.engineProbe
@@ -411,30 +286,13 @@ export class Provisioner {
     return this.engineProbe
   }
 
-  /**
-   * Refresh the idle clock for a conversation this provisioner already tracks.
-   *
-   * Idleness is measured from the last thing that happened to the container,
-   * not from the last time someone asked for it, so a long-running command has
-   * somewhere to report progress.
-   */
+  // idleness is measured from the last thing that happened to the container, so a long-running command can report progress
   touch(sessionId: string): void {
     const entry = this.tracked.get(sessionId)
     if (entry !== undefined) entry.lastUsedAt = Date.now()
   }
 
-  /**
-   * Lease one unit of work against a conversation's container.
-   *
-   * The GC sweep measures idleness from when a call *started*, which on its own
-   * would reclaim a container whose command is still running — a build, an
-   * install, a dev server held open in a terminal session — once that call
-   * passed `idleTtlMs`. Holding a lease keeps the container in place until the
-   * work finishes, and releases the idle clock when it does.
-   *
-   * @param sessionId - the conversation the work belongs to.
-   * @returns a function releasing the lease; calling it twice releases once.
-   */
+  // GC measures idleness from call start; without a lease it would reclaim a container whose command is still running
   beginWork(sessionId: string): () => void {
     this.activeWork.set(sessionId, (this.activeWork.get(sessionId) ?? 0) + 1)
     this.touch(sessionId)
@@ -449,16 +307,10 @@ export class Provisioner {
     }
   }
 
-  /** True while a conversation has leased work running. */
   hasActiveWork(sessionId: string): boolean {
     return this.activeWork.has(sessionId)
   }
 
-  /**
-   * Make a container usable: copy the helper scripts in, and install `rg` so
-   * `glob` / `grep` work. Runs once per container per process; a container
-   * recreated under us is detected by the probe and re-prepared.
-   */
   private async bootstrap(target: SandboxTarget): Promise<void> {
     const entry = this.tracked.get(target.sessionId)
     if (entry?.bootstrapped) return
@@ -472,24 +324,13 @@ export class Provisioner {
     }
 
     if (entry) entry.bootstrapped = true
-    // The container is now usable for this chat: kick follow-on work (the
-    // worktree warm install). Once per container per process — the guard
-    // above is what makes that true.
     this.hooks.onContainerReady?.(target)
   }
 
-  /**
-   * Copy the in-container command runner to `/tmp`.
-   *
-   * It travels through stdin rather than the command line: a multi-line POSIX
-   * shell script embedded in an argv element is exactly what Windows argument
-   * quoting corrupts.
-   */
   async uploadAgents(target: SandboxTarget): Promise<void> {
     await uploadRunnerScript(this.transport, target)
   }
 
-  /** Snapshot for the UI: what container this chat has, and its state. */
   async status(target: SandboxTarget): Promise<SandboxStatus> {
     const entry = this.tracked.get(target.sessionId)
     const base: SandboxStatus = {
@@ -521,7 +362,6 @@ export class Provisioner {
     }
   }
 
-  /** List every sandbox container this plugin owns. */
   async listOwned(): Promise<{ name: string; phase: string; createdAt?: string; sessionId?: string }[]> {
     const ids = await this.transport.docker(["ps", "-aq", "--filter", `label=${OWNERSHIP_LABEL}`], { timeoutMs: 30000 })
     const idList = ids.stdout
@@ -539,39 +379,20 @@ export class Provisioner {
     }))
   }
 
-  /** Delete one conversation's container. */
   async release(target: SandboxTarget): Promise<void> {
     this.tracked.delete(target.sessionId)
     this.errors.delete(target.sessionId)
     await this.remove(target)
   }
 
-  /**
-   * Delete the container of one conversation, named from its session id.
-   *
-   * Used by the app's archive seam: when the registry stops an archived
-   * conversation's work (`workspace/session-stop`), the container is this
-   * plugin's part of that work, and the name is derived so no target lookup
-   * is needed.
-   */
+  // app seam workspace/session-stop: the container name derives from the session id, no target lookup needed
   async releaseSession(sessionId: string): Promise<void> {
     this.tracked.delete(sessionId)
     this.errors.delete(sessionId)
     await this.remove({ container: containerNameFor(sessionId) })
   }
 
-  /**
-   * Release the containers of conversations the app has archived.
-   *
-   * Archiving an idle conversation writes only the durable archive set — no
-   * event reaches plugins — so the GC loop consults the registry and deletes
-   * the plugin's containers for archived ids. Containers left by an earlier
-   * process are covered too: the engine still labels them with their
-   * conversation. A later unarchive re-provisions lazily on the next call.
-   *
-   * @param archived - the registry's current archive set.
-   * @returns the names deleted.
-   */
+  // archiving emits no plugin event: the GC loop polls the archive set; older containers are covered by their labels
   async releaseArchived(archived: ReadonlySet<string>): Promise<string[]> {
     if (archived.size === 0) return []
     const deleted: string[] = []
@@ -590,19 +411,10 @@ export class Provisioner {
     return deleted
   }
 
-  /** `docker rm -f`, swallowing "no such container". */
   private async remove(target: { container: string }): Promise<void> {
     await this.transport.docker(["rm", "-f", target.container], { timeoutMs: 60000 }).catch(() => undefined)
   }
 
-  /**
-   * Delete every container this plugin owns.
-   *
-   * Used when the plugin unloads with `gcOnUnload` on: leaving sandbox
-   * containers behind after nothing is driving them is a leak.
-   *
-   * @returns the names deleted.
-   */
   async releaseAll(): Promise<string[]> {
     const owned = await this.listOwned().catch(() => [])
     const deleted: string[] = []
@@ -615,16 +427,6 @@ export class Provisioner {
     return deleted
   }
 
-  /**
-   * Delete containers that have gone idle, plus containers the engine still
-   * holds for conversations this plugin no longer tracks.
-   *
-   * A conversation with leased work running (a command still executing, a
-   * terminal session still open) is never idle, however long that work has
-   * been running.
-   *
-   * @returns the names deleted.
-   */
   async collectIdle(): Promise<string[]> {
     const deleted: string[] = []
     const now = Date.now()
@@ -636,8 +438,6 @@ export class Provisioner {
       this.tracked.delete(sessionId)
     }
 
-    // Orphans: created before the TTL window and not tracked in this process
-    // (a plugin reload, or a chat that ended without unloading).
     const owned = await this.listOwned().catch(() => [])
     for (const container of owned) {
       const sessionId = container.sessionId ?? sessionFromName(container.name)

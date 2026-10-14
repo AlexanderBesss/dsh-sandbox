@@ -1,24 +1,7 @@
-/**
- * The Docker transport, against a fake CLI.
- *
- * `dockerArgv` makes the CLI invocation configurable, which lets these tests
- * point the transport at `node -e <script>` instead of a real engine: the
- * scripts stand in for the docker CLI's stderr shapes, and the assertions pin
- * down the error classification the whole plugin branches on. Classification
- * regexes rot when the CLI rewords its messages, so the messages here are the
- * CLI's real capitalisation, not the regex's convenience.
- */
-
 import { describe, expect, it } from 'vitest'
 import { DockerTransport, SandboxUnavailableError, isMissingContainerError } from '../src/container/transport.ts'
 
-/**
- * A transport whose "docker" is `node -e <script>`.
- *
- * The fake docker arguments must not include a bare `inspect`: node's CLI
- * parses that token as its inspector subcommand wherever it sits, and the
- * child opens a debugger instead of running the script.
- */
+// fake docker args must not include a bare `inspect`: node parses it as its inspector subcommand
 function fakeCli(script: string): DockerTransport {
   return new DockerTransport({ dockerArgv: [process.execPath, '-e', script] })
 }
@@ -50,6 +33,7 @@ describe('DockerTransport.exec', () => {
   })
 })
 
+// classification regexes rot when the CLI rewords: these stderr shapes use its real capitalisation
 describe('DockerTransport.docker classification', () => {
   it('classifies an unreachable daemon, matching the CLI capitalisation', async () => {
     const transport = fakeCli(

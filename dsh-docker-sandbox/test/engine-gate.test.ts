@@ -1,8 +1,3 @@
-/**
- * The worktree-mode turn gate: with the engine down, the step must fail with
- * the "start the Docker engine" instruction instead of running on the host.
- */
-
 import { describe, expect, it } from 'vitest'
 import type { Events } from '@deepseek-ai/cordis'
 import { createEngineGate } from '../src/container/engine-gate.ts'
@@ -11,7 +6,6 @@ import { testConfig } from './helpers.ts'
 
 type PreStep = Events['agent/pre-step']
 
-/** A provisioner whose engine answer is fixed. */
 function fakeProvisioner(answer: { reachable: boolean; error?: string }): Provisioner {
   return { engineReachable: async () => answer } as unknown as Provisioner
 }
@@ -50,8 +44,7 @@ describe('createEngineGate', () => {
   it('reads the worktree toggle live, per step', async () => {
     let on = false
     const config = testConfig()
-    // The runtime wraps the volatile toggle in a reference; flip it the way
-    // the plugin manager would.
+    // the runtime wraps the volatile toggle in a reference; flip it as the plugin manager would
     ;(config.worktree as unknown as { get(): boolean }).get = () => on
     const gate = createEngineGate(fakeProvisioner({ reachable: false }), config)
     expect(await gate(payload, enter)).toEqual({ kind: 'enter', messages: [] })

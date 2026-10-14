@@ -1,11 +1,3 @@
-/**
- * The pre-attach stdin buffer.
- *
- * The cap matters: provisioning can take a while (an image pull), and a
- * caller streaming a large payload into the synchronous `stdin` handle must
- * meet backpressure instead of growing the buffer without bound.
- */
-
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { DeferredStdin } from '../src/utils/deferred-stdin.ts'
@@ -26,6 +18,7 @@ describe('DeferredStdin', () => {
   })
 
   it('reports backpressure past the cap and drains once attached', () => {
+    // provisioning can lag a caller streaming into stdin: past the cap must meet backpressure, not grow
     const deferred = new DeferredStdin()
     let accepted = true
     for (let i = 0; i < 40; i++) accepted = deferred.stream.write(Buffer.alloc(512 * 1024))
@@ -45,7 +38,7 @@ describe('DeferredStdin', () => {
     const deferred = new DeferredStdin()
     const child = new PassThrough({ highWaterMark: 8 })
     deferred.attach(child)
-    // Nobody reads the child: its buffer fills and write() starts reporting false.
+    // nobody reads the child: its buffer fills and write() starts reporting false
     let accepted = true
     for (let i = 0; i < 20; i++) accepted = deferred.stream.write(Buffer.alloc(64 * 1024))
     expect(accepted).toBe(false)

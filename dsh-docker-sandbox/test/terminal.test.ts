@@ -1,11 +1,3 @@
-/**
- * The `shell` terminal backend.
- *
- * Two things these tests pin down: the conversation a terminal belongs to comes
- * from the spawn request (a terminal is opened from the UI, where no agent
- * chain is running), and a send settles only on its own completion marker.
- */
-
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import type { TerminalSessionId } from '@deepseek-ai/dsh-terminal'
@@ -51,14 +43,12 @@ function makeBackend(live: FakeLive): { backend: ReturnType<typeof createShellBa
     beginWork: () => () => undefined,
     touch: () => undefined,
   } as unknown as Provisioner
-  // No initiating agent: this is what the terminal panel looks like to the plugin.
+  // no initiating agent: this is what the terminal panel looks like to the plugin
   const ctx = {
     agents: { currentInitiator: () => undefined },
     sessions: { get: (id: string) => ({ id, header: { cwd: WORKSPACE } }) },
   } as unknown as SandboxContext
-  // Short grace: `close()` escalates TERM→KILL after `graceMs`, and the fake
-  // live process never exits on its own, so the default 3 s would just slow
-  // every test down.
+  // short grace: the fake live process never exits, so the default 3 s would slow every test down
   const config = testConfig({ graceMs: 50 })
   const backend = createShellBackend(ctx, {
     transport,
@@ -107,8 +97,7 @@ describe('shell terminal backend', () => {
     expect((await first.done).waitReason).toBe('timeout')
 
     const second = session.startSend({ text: 'echo hi' })
-    // The stale verdict arrives late: it must not settle the new send, and it
-    // must not show up in the new send's viewport as output.
+    // the stale verdict arrives late: it must not settle the new send or appear in its viewport
     live.child.stdout.write('__DSH_DONE_1__ 0\n')
     live.child.stdout.write('hi\n')
     live.child.stdout.write('\n__DSH_DONE_2__ 0\n')
@@ -120,8 +109,7 @@ describe('shell terminal backend', () => {
   })
 
   it('does not let a stale abort settle the send that runs next', async () => {
-    // The first send finished on its marker; aborting its signal afterwards
-    // (caller cleanup) must not settle the second send early.
+    // the first send finished on its marker; a late abort (caller cleanup) must not settle the second
     const live = fakeLive()
     const { backend } = makeBackend(live)
     const session = await backend.spawn({ sessionId: SESSION, owner: 'ui', type: 'shell' })
@@ -141,8 +129,7 @@ describe('shell terminal backend', () => {
   })
 
   it('signals the session shell process group when closing', async () => {
-    // Killing the local docker client does not stop the in-container command;
-    // close must signal the group the runner recorded.
+    // killing the local docker client does not stop the in-container command: close signals the recorded group
     const live = fakeLive()
     const { backend, execed } = makeBackend(live)
     const session = await backend.spawn({ sessionId: SESSION, owner: 'ui', type: 'shell' })
@@ -152,9 +139,7 @@ describe('shell terminal backend', () => {
   })
 
   it('escalates a close to KILL when the session shell ignores TERM', async () => {
-    // The fake live process never exits, standing in for a command that traps
-    // or ignores SIGTERM; close must escalate after the grace period rather
-    // than leave it running until the GC deletes the container.
+    // the fake never exits, standing in for a SIGTERM-ignoring command: close must escalate after graceMs
     const live = fakeLive()
     const { backend, execed } = makeBackend(live)
     const session = await backend.spawn({ sessionId: SESSION, owner: 'ui', type: 'shell' })
@@ -165,8 +150,7 @@ describe('shell terminal backend', () => {
   })
 
   it('keeps the completion sentinel out of the transcript the panel reads back', async () => {
-    // The marker is protocol, not output: it must not appear in `read()` any
-    // more than it appears in a send's delta.
+    // the marker is protocol, not output: it must not appear in `read()` either
     const live = fakeLive()
     const { backend } = makeBackend(live)
     const session = await backend.spawn({ sessionId: SESSION, owner: 'ui', type: 'shell' })
@@ -191,8 +175,7 @@ describe('shell terminal backend', () => {
 
     const killArgv = execed.find((argv) => argv.join(' ').includes('kill -INT'))
     expect(killArgv, 'signal must reach the recorded process group').toBeDefined()
-    // The session lives on after a signal; its next signal (and its close)
-    // still need the recorded group, so the pidfile must survive.
+    // the session lives on after a signal: its next signal and its close still need the pidfile
     expect(killArgv!.join(' ')).not.toContain('rm -f')
     await session.close('done')
   })

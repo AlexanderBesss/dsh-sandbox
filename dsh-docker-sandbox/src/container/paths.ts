@@ -1,67 +1,20 @@
-/**
- * Path translation between the two worlds one chat straddles.
- *
- * ```
- * Windows            F:\Projects\dsh-sandbox
- *   │  bind mount (Docker Desktop drive sharing)
- * container          /workspace            (workspace mode)
- *                  or /f/Projects/dsh-sandbox (drives mode)
- * ```
- *
- * The model and every tool speak the container world: `ctx.fs` targets, `read`
- * / `write` paths, and shell `cd` targets are container paths. The host-side
- * file tools keep seeing the same bytes because the volume is a bind mount of
- * the Windows workspace (Docker Desktop shares drives into its VM natively, so
- * no intermediate WSL path exists).
- *
- * Two mount modes are supported:
- *
- * - `workspace` (default): only the session workspace is mounted, at
- *   `containerWorkspace`. A path outside it is rejected with a named error
- *   rather than silently reaching host files.
- * - `drives`: every Windows drive root is mounted at `/<drive-letter>`, so
- *   mapping is a pure textual transform and any absolute Windows path has a
- *   container equivalent.
- *
- * @module dsh-docker-sandbox/container/paths
- */
-
+// container files are a Docker Desktop bind mount of the Windows workspace; drives mode maps paths by text transform
 export type MountMode = "workspace" | "drives"
 
-/** One bind mount: Windows-visible source mounted at a container path. */
 export interface SandboxMount {
-  /** Volume source as Windows sees it (what `docker run -v` gets as host path). */
   hostPath: string
-  /** Where it appears inside the container. */
   containerPath: string
 }
 
-/**
- * An extra bind mount one session needs beyond its workspace.
- *
- * Worktree mode carves the session's checkout out of a main repo, and a
- * linked worktree's `.git` file points into `<mainRepo>/.git/worktrees/<name>`
- * — a Windows path the container cannot see. Mounting the main `.git` at its
- * drive form keeps git (and anything reading git internals) working, and this
- * record lets the mapper translate paths under it instead of rejecting them.
- */
+// a worktree's .git file points into the main repo via a Windows path the container cannot see; mount the main .git too
 export interface ExtraMount {
   mount: SandboxMount
-  /** Container path of the linked worktree's gitdir, for `GIT_DIR`. */
   containerGitDir: string
-  /** Host-effective git settings to mirror into the container (`GIT_CONFIG_*`). */
   gitConfig: Record<string, string>
-  /**
-   * The checkout the worktree was carved from. The app hands tools the
-   * session's original header cwd (the main checkout) as the working
-   * directory, so paths under it must resolve to the worktree — the session's
-   * project *is* the worktree, and without the alias every command would be
-   * rejected as outside the mount before the container is ever provisioned.
-   */
+  // the app hands tools the session's original header cwd; paths under it must alias onto the worktree or be rejected
   aliasHost?: string
 }
 
-/** A path that cannot be expressed inside the sandbox. */
 export class SandboxPathError extends Error {
   constructor(
     message: string,
@@ -72,24 +25,20 @@ export class SandboxPathError extends Error {
   }
 }
 
-/** Normalize Windows separators and collapse redundant slashes. */
 function normalize(input: string): string {
   const slashed = input.replace(/\\/g, "/")
   const collapsed = slashed.replace(/\/{2,}/g, "/")
   return collapsed.length > 1 ? collapsed.replace(/\/+$/, "") : collapsed
 }
 
-/** True for `C:\…`, `C:/…` (a Windows absolute path with a drive letter). */
 export function isWindowsAbsolute(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(path)
 }
 
-/** True for anything that looks like a Windows path: a drive-letter root or a UNC share. */
 export function isWindowsPath(value: string): boolean {
   return isWindowsAbsolute(value) || /^\\\\/.test(value)
 }
 
-/** Resolve `.` / `..` segments without touching the filesystem. */
 function resolveSegments(path: string): string {
   const absolute = path.startsWith("/")
   const out: string[] = []
@@ -109,7 +58,6 @@ function resolveSegments(path: string): string {
 }
 
 export class PathMapper {
-  /** Per-session extra mounts (worktree mode's main `.git`), keyed by workspace. */
   private readonly extraMounts = new Map<string, ExtraMount>()
 
   constructor(
@@ -117,39 +65,20 @@ export class PathMapper {
     readonly containerWorkspace: string,
   ) {}
 
-  /**
-   * Record an extra mount for one session workspace, so `mountsFor` adds it to
-   * the container and the mappers accept paths under it.
-   */
   registerExtraMount(workspace: string, extra: ExtraMount): void {
     this.extraMounts.set(normalize(workspace), extra)
   }
 
-  /** The extra mount recorded for one session workspace, if any. */
   extraMountFor(workspace: string): ExtraMount | undefined {
     return this.extraMounts.get(normalize(workspace))
   }
 
-  /**
-   * Translate a Windows path to the path the same file has under a drive-root
-   * mount (`F:\Projects\x` → `/f/Projects/x`). Paths that are already POSIX
-   * (container paths) pass through unchanged.
-   *
-   * @param path - Windows or container path.
-   * @returns the container-world drive form.
-   */
   static windowsToDrive(path: string): string {
     if (!isWindowsAbsolute(path)) return normalize(path)
     const drive = path[0]!.toLowerCase()
     return normalize(`/${drive}/${path.slice(2)}`)
   }
 
-  /**
-   * Translate a `/<drive>/…` path back to its Windows form.
-   *
-   * @param path - container path under a mounted drive root.
-   * @returns the Windows form, or undefined when the path is not drive-backed.
-   */
   static driveToWindows(path: string): string | undefined {
     const match = /^\/([a-zA-Z])(\/.*)?$/.exec(normalize(path))
     if (!match) return undefined
@@ -158,12 +87,6 @@ export class PathMapper {
     return `${drive}:${rest || "\\"}`
   }
 
-  /**
-   * Build the volume plan for one session workspace.
-   *
-   * @param workspace - Windows path of the session workspace.
-   * @returns the bind mounts the sandbox container needs.
-   */
   mountsFor(workspace: string): SandboxMount[] {
     const extra = this.extraMounts.get(normalize(workspace))
     if (this.mode === "drives") {
@@ -185,38 +108,23 @@ export class PathMapper {
       hostPath: workspace,
       containerPath: this.containerWorkspace,
     }]
-    // A worktree session also needs its main repo's `.git` (the linked
-    // worktree's gitdir lives there). In `drives` mode the drive mount
-    // already covers it.
+    // in drives mode the drive mount already covers the main repo's `.git`; workspace mode needs it explicitly
     if (extra !== undefined) mounts.push(extra.mount)
     return mounts
   }
 
-  /** The Windows path of the session workspace (the volume source). */
   workspaceHostPath(workspace: string): string {
     if (this.mode === "drives") return PathMapper.windowsToDrive(workspace)
     return this.mountsFor(workspace)[0]!.hostPath
   }
 
-  /**
-   * Translate any accepted path form into the container path.
-   *
-   * Accepts container paths, drive-mounted paths (`/f/…`), Windows absolute
-   * paths, and relative paths (resolved against the container workspace).
-   *
-   * @param path - the path as a caller wrote it.
-   * @param workspace - Windows path of the session workspace.
-   * @returns the container-world path.
-   * @throws {SandboxPathError} when the path has no container equivalent.
-   */
   toContainer(path: string, workspace: string): string {
     const raw = normalize(path)
     const root = this.containerRoot(workspace)
     if (raw === "") return root
 
-    // Already a container path.
     if (raw.startsWith("/")) {
-      // A drive mount is always lower-cased, so `/F/x` and `/f/x` name one file.
+      // a drive mount is always lower-cased, so `/F/x` and `/f/x` name one file
       if (this.mode === "drives" && /^\/[a-z](\/|$)/i.test(raw)) {
         return resolveSegments(`/${raw[1]!.toLowerCase()}${raw.slice(2)}`)
       }
@@ -227,8 +135,6 @@ export class PathMapper {
       if (raw === root || raw.startsWith(`${root}/`)) {
         return resolveSegments(raw)
       }
-      // A worktree session's main-repo `.git` is mounted at its drive form;
-      // git plumbing names those paths, so they map rather than get rejected.
       const extra = this.extraMounts.get(normalize(workspace))
       if (extra !== undefined) {
         const mounted = extra.mount.containerPath
@@ -237,9 +143,6 @@ export class PathMapper {
         if (raw === hostDrive || raw.startsWith(`${hostDrive}/`)) {
           return resolveSegments(`${mounted}${raw.slice(hostDrive.length)}`)
         }
-        // The checkout the worktree was carved from aliases onto the worktree:
-        // the app passes the session's original header cwd to tools, and the
-        // session's project is its worktree.
         if (extra.aliasHost !== undefined) {
           const aliasDrive = PathMapper.windowsToDrive(extra.aliasHost)
           if (raw === aliasDrive) return resolveSegments(root)
@@ -257,10 +160,7 @@ export class PathMapper {
 
     if (isWindowsAbsolute(path)) return this.toContainer(PathMapper.windowsToDrive(path), workspace)
 
-    // Relative: resolve inside the container workspace. A `..` that walks out
-    // of the mount is rejected rather than resolved to a path the container
-    // happens to have (which would read as host access the plugin does not
-    // grant).
+    // a `..` that walks out of the mount is rejected, not resolved to a path the container happens to have
     const resolved = resolveSegments(`${root}/${raw}`)
     if (resolved !== root && !resolved.startsWith(`${root}/`)) {
       throw new SandboxPathError(
@@ -271,14 +171,6 @@ export class PathMapper {
     return resolved
   }
 
-  /**
-   * Translate a container path back to the Windows path a host tool would use.
-   *
-   * @param path - container path.
-   * @param workspace - Windows path of the session workspace.
-   * @returns the Windows form, or undefined when it has none — including when
-   *   the anchor itself is not a Windows path, which leaves no host file to name.
-   */
   toWindows(path: string, workspace: string): string | undefined {
     const raw = resolveSegments(normalize(path))
     const extra = this.extraMounts.get(normalize(workspace))
@@ -290,26 +182,17 @@ export class PathMapper {
       }
     }
     if (this.mode === "workspace") {
-      // `mountsFor` refuses a non-Windows anchor; this method reports "no host
-      // path" instead, so a caller anchoring on a container path still gets a
-      // usable target rather than a mapping error.
+      // unlike mountsFor, a non-Windows anchor reports "no host path" rather than throwing
       if (!isWindowsAbsolute(workspace)) return undefined
       const root = this.containerRoot()
       if (raw !== root && !raw.startsWith(`${root}/`)) return undefined
       const host = normalize(this.workspaceHostPath(workspace))
-      // `host` is normalized to `F:/…`, so everything after the drive letter
-      // already begins with the separator that joins it to the container part.
+      // `host` is normalized to `F:/…`, so everything after the drive letter already begins with the joining separator
       return `${host.slice(0, 2)}${host.slice(2).replace(/\//g, "\\")}${raw.slice(root.length).replace(/\//g, "\\")}`
     }
     return PathMapper.driveToWindows(raw)
   }
 
-  /**
-   * The container path a session's commands start in.
-   *
-   * @param workspace - Windows path of the session workspace; in `drives` mode
-   *   this picks the drive root the session lives on.
-   */
   containerRoot(workspace?: string): string {
     if (this.mode === "drives") {
       return PathMapper.windowsToDrive(workspace ? workspaceDriveRoot(workspace) : "C:\\")
@@ -322,7 +205,6 @@ export class PathMapper {
   }
 }
 
-/** The drive root of a Windows path, e.g. `F:\\`. */
 function workspaceDriveRoot(workspace: string): string {
   return isWindowsAbsolute(workspace) ? `${workspace[0]!.toUpperCase()}:\\` : workspace
 }

@@ -1,24 +1,8 @@
-/**
- * A writable that buffers until the real child stream exists.
- *
- * A spawn is asynchronous — the `docker exec` child appears only after the
- * container is provisioned — but the seam hands the caller a `stdin` handle
- * synchronously. Writes made before the child exists are buffered here and
- * flushed when {@link DeferredStdin.attach} connects the real stream; an
- * `end()` before that point is remembered and replayed on the child.
- *
- * The pre-attach buffer is capped: past the cap `write()` returns `false`
- * (backpressure) instead of growing memory without bound, and a `drain`
- * notification goes out once the buffer has been flushed to the child. After
- * attach, `write()` forwards the child's own backpressure.
- *
- * @module dsh-docker-sandbox/utils/deferred-stdin
- */
+// buffers writes until attach() connects the child; end() before attach is replayed; past the cap write() reports backpressure
 
-/** Pre-attach buffer cap: past it, writes report backpressure. */
+// pre-attach buffer cap: past it, writes report backpressure
 const BUFFER_CAP_BYTES = 8 * 1024 * 1024
 
-/** A writable that buffers until the real child stream exists. */
 export class DeferredStdin {
   private buffered: Buffer[] = []
   private bufferedBytes = 0
@@ -68,9 +52,7 @@ export class DeferredStdin {
 
   private push(chunk: any): boolean {
     const data: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
-    // After attach the child's own backpressure is the truth; before attach,
-    // the cap is. Either way the caller gets a real signal, not a constant
-    // `true` over an unbounded buffer.
+    // after attach the child's backpressure is the truth, before it the cap is — never a constant true
     if (this.live) return this.live.write(data)
     this.buffered.push(data)
     this.bufferedBytes += data.length
@@ -92,7 +74,7 @@ export class DeferredStdin {
     for (const chunk of this.buffered.splice(0)) child.write(chunk)
     this.bufferedBytes = 0
     if (this.ended) child.end()
-    // A caller that was held at the cap can resume now that the buffer is gone.
+    // a caller held at the cap can resume now that the buffer is gone
     this.fireDrain()
   }
 }

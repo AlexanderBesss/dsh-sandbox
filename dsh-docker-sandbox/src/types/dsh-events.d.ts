@@ -1,49 +1,18 @@
-/**
- * Augmentation of the real cordis module with the DSH host events this plugin
- * listens to. Unlike `seams.d.ts` (which stands in for untyped app packages),
- * this file is a module augmentation of the installed, typed `@deepseek-ai/cordis`.
- *
- * Shapes mirror call sites verified in the installed bundle (0.2.0-rc.2):
- * `dsh-workspace` dispatches the parallel hook, and `dsh-agent` / `dsh-jobs` /
- * `dsh-subagent` / `dsh-schedule` register the same handler this plugin uses.
- *
- * @module dsh-docker-sandbox/types/dsh-events
- */
+// augments cordis with DSH host events; shapes mirror call sites in bundle 0.2.0-rc.2, keep in sync when the app updates
 
 declare module "@deepseek-ai/cordis" {
   interface Events {
-    /**
-     * Parallel hook: the workspace registry is stopping an archived
-     * conversation's work (`archiveSession` with `stopActivity`). Owners of
-     * session work — agents, jobs, subagents, schedules, and this plugin's
-     * container — stop when it fires.
-     * @mode parallel
-     */
+    // parallel hook: owners of session work (agents, jobs, subagents, schedules, ours) stop with an archived conversation
     "workspace/session-stop"(payload: { sessionId: string }): void
 
-    /**
-     * Broadcast: the session store has torn a session down — archived,
-     * deleted, or a subagent child whose run settled. The teardown carries
-     * the dead session, so a container keyed to it can leave with it instead
-     * of waiting out the idle TTL.
-     * @mode broadcast
-     */
+    // broadcast: session torn down (archived, deleted, settled child); its container can leave with it, not wait out the TTL
     "session/disposed"(session: { id: string }): void
 
-    /**
-     * Waterfall: the agent loop (`dsh-agent-loop`) proposes one step and
-     * dispatches this before anything of it runs. A listener returns the
-     * downstream decision, replaces it (`{ kind: "reject" }` ends the turn as
-     * `blocked`, silently), or throws — which ends the turn as an error the
-     * app renders in the conversation. The app's own archived-session gate
-     * and the Claude-Code hooks use this same boundary.
-     * @mode waterfall
-     */
+    // waterfall: runs before a proposed step; { kind: "reject" } ends the turn silently, a throw ends it with a visible error
     "agent/pre-step"(
       payload: {
-        /** The agent the step is proposed for. */
         agent: { id: string }
-        /** The inbox batch claimed for this step. */
+        // the inbox batch claimed for this step
         messages: readonly unknown[]
         turn: number
         step: number

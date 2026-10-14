@@ -1,29 +1,3 @@
-/**
- * The AI pass behind a merge request: name the branch, write the summary.
- *
- * Both jobs need a reader who has looked at the diff, and the moment they are
- * worth doing is the same moment — the button has staged the work and is about
- * to commit it and make it public. So one fresh subagent (the same mechanism the
- * review button uses, delegated from the same session, working in the same
- * worktree) answers for both: a branch name that says what the change is, a
- * title a reviewer would recognize, and the bullet points that go on the request.
- *
- * The answer is parsed by a program, so the format is spelled out in the prompt
- * and the parser keeps only what matches: a branch slug that git can accept, a
- * one-line title, and bullet lines that are not diff echoes. Anything else is
- * dropped rather than trusted.
- *
- * Everything here is fail-soft, because the work is already staged when the pass
- * runs. A missing service, a refused child, a timeout, or an unparsable answer
- * costs only the naming and the summary: the branch keeps the name it already
- * has, the description keeps the commits and diffstat git can prove, and the
- * caller gets an error string to show rather than an exception. One deadline
- * covers the whole pass — probes, delegation, and the child's answer alike —
- * because the merge request blocks on this call.
- *
- * @module dsh-docker-sandbox/container/pr-brief
- */
-
 import type { SandboxConfig } from "../config.ts"
 import type { LiveAgent, SubagentResult, SubagentService } from "../context.ts"
 import type { BootstrapLogger } from "./bootstrap.ts"
@@ -32,47 +6,40 @@ import type { PullRequestFacts } from "./pr-description.ts"
 import { forkPointFor } from "./review.ts"
 import { titleSlugFor } from "./session.ts"
 
-/** Diff budget in the prompt; the child can run `git diff` for the rest. */
+// prompt diff budget; the child can run git diff for the rest
 export const BRIEF_DIFF_CHARS = 40_000
 
-/** What the brief may carry: bullets, and how short each one may be. */
 export const MAX_BRIEF_BULLETS = 8
 export const MAX_BRIEF_BULLET_CHARS = 200
 
-/** Longest branch slug the brief may propose, before the id digest is added. */
+// slug cap; the id digest is appended after this
 export const MAX_BRANCH_SLUG_CHARS = 40
 
-/** Extra room for the child to settle after its signal is aborted. */
+// extra room for the child to settle after its signal is aborted
 const SETTLE_GRACE_MS = 15000
 
-/** What one AI pass produced. Every field is optional except the bullets. */
 export interface PullRequestBrief {
-  /** A ref-safe slug naming the change, without the configured prefix. */
+  // ref-safe slug, without the configured prefix
   branchSlug?: string
-  /** One line a reviewer would call this change. */
   title?: string
-  /** The summary bullets, already clipped to the budget. */
+  // already clipped to the budget
   bullets: string[]
 }
 
-/** The pass either answered usefully, or there is a reason to show. */
 export type BriefOutcome = { brief: PullRequestBrief } | { error: string }
 
-/** Asks for the brief of one committed-but-not-yet-pushed branch. */
 export type PrBrief = (sessionId: string, facts: PullRequestFacts) => Promise<BriefOutcome>
 
 export interface PrBriefDeps {
-  /** The subagent service, once the deferred inject has seen it. */
+  // available only once the deferred inject has seen the service
   subagents: () => SubagentService | undefined
-  /** The live agent of the session — the child's delegation parent. */
+  // the child's delegation parent
   parentFor: (sessionId: string) => LiveAgent | undefined
-  /** Host git, used to put the diff in front of the child. */
   git: CliRunner
   config: SandboxConfig
   logger?: BootstrapLogger
 }
 
-/** One git call, answered as text; failure reads as "nothing to show". */
 async function gitText(git: CliRunner, args: string[], cwd: string, timeoutMs: number): Promise<string> {
   try {
     return (await git.run(args, { cwd, timeoutMs })).stdout.trim()
@@ -81,13 +48,7 @@ async function gitText(git: CliRunner, args: string[], cwd: string, timeoutMs: n
   }
 }
 
-/**
- * The child's brief: the change in front of it, the exact shape of the answer,
- * and the rules it has to satisfy. Deliberately blunt — a branch called
- * `session-3` and a summary that hedges are both failures of this step, and a
- * summary that narrates the diff back is worse than the diffstat, because it is
- * the part a reviewer reads first and trusts.
- */
+// deliberately blunt: a vague branch name or a hedged summary is a failure of this step
 export function buildBriefPrompt(facts: PullRequestFacts, diff: string): string {
   const clipped = diff.length > BRIEF_DIFF_CHARS
     ? `${diff.slice(0, BRIEF_DIFF_CHARS).trimEnd()}\n… (truncated — run \`git diff\` for the rest)`
@@ -150,7 +111,6 @@ export function buildBriefPrompt(facts: PullRequestFacts, diff: string): string 
   ].join("\n")
 }
 
-/** Cut one bullet to the budget, at a word boundary where one is near. */
 function clipBullet(text: string): string {
   if (text.length <= MAX_BRIEF_BULLET_CHARS) return text
   const cut = text.slice(0, MAX_BRIEF_BULLET_CHARS)
@@ -158,21 +118,12 @@ function clipBullet(text: string): string {
   return `${(space > 40 ? cut.slice(0, space) : cut).trimEnd()}…`
 }
 
-/** A bullet that is really a diff line the child echoed (`- -old code`). */
+// a bullet that is really a diff line the child echoed
 function isDiffEcho(body: string): boolean {
   return /^[-+]/.test(body) || /^(@@|diff --git|index [0-9a-f]{6,})/.test(body)
 }
 
-/**
- * Read the answer, strictly.
- *
- * Only the three shapes the format promises survive: a `BRANCH:` line whose slug
- * git can accept, a one-line `TITLE:`, and bullet lines that are not diff echoes.
- * A preamble, a fence, or a closing paragraph is dropped rather than trusted. The
- * bullets are what make the answer worth having, so an answer without them is
- * reported as a failure; a missing BRANCH or TITLE only means that part keeps
- * what the plugin already had.
- */
+// strict parse: only BRANCH/TITLE lines and non-diff-echo bullets survive; no bullets means failure
 export function parseBrief(text: string): PullRequestBrief | undefined {
   const lines = text.replace(/^[ \t]*```[^\n]*$/gm, "").split(/\r?\n/)
   let branchSlug: string | undefined
@@ -209,7 +160,6 @@ export function parseBrief(text: string): PullRequestBrief | undefined {
   }
 }
 
-/** How a child that did not finish reads in the reason string. */
 function stopReasonText(reason: string): string {
   switch (reason) {
     case "aborted": return "was stopped before it finished"
@@ -220,7 +170,6 @@ function stopReasonText(reason: string): string {
   }
 }
 
-/** Await one promise, giving up (as `undefined`) after `ms`. */
 async function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -235,12 +184,7 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined
   }
 }
 
-/**
- * Build the brief pass for one plugin wiring.
- *
- * @param deps - the subagent service, the session's live agent, host git, config.
- * @returns a pass that never throws and never reports success without bullets.
- */
+// fail-soft: never throws; a failed pass costs only the naming, never the request
 export function createPrBrief(deps: PrBriefDeps): PrBrief {
   const fallback = "the branch keeps its current name and the description lists commits and diffstat only"
   return async (sessionId, facts) => {
@@ -251,8 +195,7 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
     const parent = deps.parentFor(sessionId)
     if (parent === undefined) return { error: `this session has no live agent to delegate to, so ${fallback}` }
 
-    // One deadline for the whole pass, because the merge request blocks here:
-    // a wedged service or a slow probe costs the naming, never the request.
+    // one deadline for probes, delegation, and the answer: the merge request blocks here
     const budgetMs = deps.config.prBriefTimeoutMs
     const deadline = Date.now() + budgetMs
     const left = () => Math.max(deadline - Date.now(), 1)
@@ -276,14 +219,13 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
       })
       const run = await within(started, left())
       if (run === undefined) {
-        // A child whose delegation lands after the budget still has to close.
+        // a child whose delegation lands after the budget still has to close
         void started.then((late) => { void late.dispose?.() }, () => undefined)
         return { error: `the naming subagent could not be started within ${budgetMs} ms, so ${fallback}` }
       }
       let result: SubagentResult | undefined
       try {
-        // The signal already carries the deadline; this is the room left for a
-        // child that ignores it, proportional so a short budget stays short.
+        // grace for a child that ignores the aborted signal, proportional to the budget
         result = await within(run.result, left() + Math.min(SETTLE_GRACE_MS, budgetMs))
       } catch {
         result = undefined
@@ -291,7 +233,7 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
       try {
         await run.dispose?.()
       } catch {
-        // A child that will not close must not cost the request its naming.
+        // a child that will not close must not cost the request its naming
       }
       if (result === undefined) {
         return { error: `the naming subagent did not answer within ${budgetMs} ms, so ${fallback}` }

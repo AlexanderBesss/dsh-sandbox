@@ -8,16 +8,10 @@ import { PathMapper } from '../src/container/paths.ts'
 import { testConfig } from './helpers.ts'
 import type { SandboxContext } from '../src/context.ts'
 
-// The host-backed fs is the WINDOWS host fs: these tests drive the real
-// Windows→/workspace mapping against real temp files, so they only hold on a
-// Windows host. Inside the Linux sandbox container `tmpdir()` is a POSIX path,
-// which the PathMapper (Windows-host-only by design) reads as a container path
-// outside the mount — honest skips, not failures.
+// drives the real Windows→/workspace mapping against real temp files, so these skip on posix
 const posix = process.platform !== 'win32'
 
-// A real temp workspace: the host-backed fs is the real host fs, so the
-// honest unit test runs against real files. `workspace` is the session's
-// Windows cwd; targets come back as container paths.
+// `workspace` is the session's Windows cwd; targets come back as container paths
 let workspace = ''
 let fs: DockerFileSystem
 
@@ -60,8 +54,7 @@ describe.skipIf(posix)('DockerFileSystem.resolve', () => {
   })
 
   it('maps a host path back into this world', () => {
-    // The shipped gateway contract: `processPathFromHostPath` answers with the
-    // process path (a string), and `processPath(resolve(mapped))` round-trips.
+    // shipped gateway contract: `processPath(resolve(processPathFromHostPath(p)))` round-trips
     const mapped = fs.processPathFromHostPath(host('src', 'a.ts'))
     expect(mapped).toBe(host('src', 'a.ts'))
     expect(fs.processPath(fs.resolve(mapped!))).toBe(host('src', 'a.ts'))
@@ -78,9 +71,7 @@ describe.skipIf(posix)('DockerFileSystem.resolve', () => {
 })
 
 describe.skipIf(posix)('DockerFileSystem in worktree mode', () => {
-  // The session's file tools must land in the session's worktree even though
-  // the app passes the session-header root (the main checkout) as `cwd`: the
-  // mapper's alias resolves that cwd into the worktree.
+  // the app passes the main checkout as cwd; the mapper's alias must resolve it into the worktree
   let wtFs: DockerFileSystem
   let main = ''
   let worktree = ''
@@ -139,8 +130,6 @@ describe.skipIf(posix)('DockerFileSystem in worktree mode', () => {
   })
 
   it('still writes the main checkout directly when worktree mode is off', async () => {
-    // The same fs without a worktree entry: session.workspace is the main
-    // checkout, so edits land there (the documented shared-workspace mode).
     const plain = new PathMapper('workspace', '/workspace')
     const ctx = {
       agents: {
@@ -190,9 +179,7 @@ describe.skipIf(posix)('DockerFileSystem reads and writes', () => {
   })
 
   it('matches a multi-line edit whose endings differ from the file (CRLF checkout)', async () => {
-    // The read tool shows LF-normalized text, so the model edits with `\n`;
-    // a core.autocrlf checkout stores `\r\n`. The edit must still land, and
-    // the file must keep its CRLF style.
+    // the read tool shows LF text while an autocrlf checkout stores `\r\n`: the edit must keep CRLF
     const target = fs.resolve('crlf.json')
     await writeFile(host('crlf.json'), '{\r\n  "version": "0.1.16"\r\n}\r\n')
     const outcome = await fs.editText(target, {
@@ -234,9 +221,7 @@ describe.skipIf(posix)('DockerFileSystem reads and writes', () => {
   })
 
   it('inserts replacement text verbatim, $ sequences and all', async () => {
-    // `String.replace` reads `$&`, `$1`, `` $` ``… inside a string replacement,
-    // which silently rewrites new text carrying a shell `$$` or a regex
-    // backreference. The single-match path must insert the text as given.
+    // `String.replace` expands `$&` and `$1` in replacements: the single-match path must insert verbatim
     const target = fs.resolve('dollar.txt')
     await fs.writeText(target, 'echo hello')
     const wanted = 'echo $$ $& $` $1'

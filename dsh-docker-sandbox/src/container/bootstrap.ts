@@ -1,31 +1,17 @@
-/**
- * Making a fresh container usable.
- *
- * A newly created (or recreated) sandbox container is bare: the command
- * runner has to be copied in, and `rg` installed so `glob` / `grep` work.
- * This module owns those steps and the probe that decides which are still
- * needed; the provisioner keeps the lifecycle and calls into it.
- *
- * @module dsh-docker-sandbox/container/bootstrap
- */
-
 import { readFile } from "node:fs/promises"
 import type { SandboxTarget } from "./session.ts"
 import type { DockerTransport } from "./transport.ts"
 
-/** The logger slice the bootstrap steps report through. */
 export type BootstrapLogger = {
   info?: (...args: unknown[]) => void
   warn?: (...args: unknown[]) => void
 }
 
-/** What the probe reports about a container's bootstrap state. */
 export interface BootstrapFacts {
   agentsMissing: boolean
   rgMissing: boolean
 }
 
-/** Ask the container whether the runner script and `rg` are already in place. */
 export async function probeBootstrap(transport: DockerTransport, target: SandboxTarget): Promise<BootstrapFacts> {
   const probe = await transport
     .execInContainer(
@@ -43,10 +29,9 @@ export async function probeBootstrap(transport: DockerTransport, target: Sandbox
   return { agentsMissing: facts.includes("AGENTS=no"), rgMissing: facts.includes("RG=no") }
 }
 
-/** Where `rg` comes from; mirrors the `ripgrepSource` config union. */
+// mirrors the ripgrepSource config union
 export type RipgrepSource = "package" | "url" | "none"
 
-/** The install command for `rg`, per the configured source. */
 export function ripgrepInstallCommand(source: RipgrepSource): string {
   return source === "url"
     ? "wget -qO- https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz | tar xz -C /usr/local/bin --strip-components=1"
@@ -56,7 +41,6 @@ export function ripgrepInstallCommand(source: RipgrepSource): string {
       + "else echo 'no package manager found for ripgrep' >&2; exit 3; fi"
 }
 
-/** Install `rg`, warning (not failing) when the image resists. */
 export async function installRipgrep(
   transport: DockerTransport,
   target: SandboxTarget,
@@ -72,22 +56,14 @@ export async function installRipgrep(
     logger?.warn?.(
       `ripgrep bootstrap failed in ${target.container} (exit ${result.code}): ${result.stderr.toString("utf8").trim().slice(0, 300)}`,
     )
-    // Search degrades to a clear tool error; shell and files still work.
+    // search degrades to a clear tool error; shell and files still work
   }
 }
 
-/**
- * Copy the in-container command runner to `/tmp`.
- *
- * It travels through stdin rather than the command line: a multi-line POSIX
- * shell script embedded in an argv element is exactly what Windows argument
- * quoting corrupts.
- */
+// the script travels through stdin: a multi-line script in an argv element is what Windows argument quoting corrupts
 export async function uploadRunnerScript(transport: DockerTransport, target: SandboxTarget): Promise<void> {
   const content = await readFile(new URL("../../agent/run.sh", import.meta.url))
-  // A checkout with CRLF line endings would leave a `\r` at the end of every
-  // line, which POSIX sh reports as a missing command. Normalising here
-  // makes the upload independent of how the package was unpacked.
+  // a CRLF checkout would leave a `\r` on every line, which POSIX sh reads as a missing command
   const script = content.toString("utf8").replace(/\r\n/g, "\n")
   await transport.execInContainer(
     target,

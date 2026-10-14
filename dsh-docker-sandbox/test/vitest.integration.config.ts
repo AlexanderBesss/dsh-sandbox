@@ -1,11 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
-/**
- * Integration run: the same suite, with `DSH_DOCKER=1` set inside the test
- * process. Setting it in the npm script would need a POSIX shell, so the flag
- * lives here instead and the script stays portable.
- */
+// DSH_DOCKER is set here, not in the npm script: that would need a POSIX shell, so the script stays portable
 export default defineConfig({
   resolve: {
     alias: {

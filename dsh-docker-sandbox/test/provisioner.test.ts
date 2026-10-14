@@ -36,8 +36,7 @@ describe('Provisioner.runArgs', () => {
     const args = provisioner.runArgs(target)
     const label = args.find((a) => a.startsWith('com.docker.compose.project='))
     expect(label).toBeDefined()
-    // Same workspace, different sessions: one group. Different workspaces:
-    // distinct groups even when the directory names match.
+    // same workspace, different sessions: one group; different workspaces: distinct groups
     const project = (label as string).split('=')[1]
     expect(project).toMatch(/^dsh-dsh-sandbox-[0-9a-f]+$/)
     const same = provisioner.runArgs({ ...target, sessionId: 'session-9', container: containerNameFor('session-9') })
@@ -139,8 +138,7 @@ describe('Provisioner.ensure', () => {
   })
 
   it('refuses to adopt a container it does not own', async () => {
-    // A container that merely shares the derived name is not this plugin's to
-    // run commands in, and recreating it would delete someone else's work.
+    // a container merely sharing the derived name is not ours; recreating it deletes someone else's work
     const { provisioner, calls, target } = makeProvisioner({ state: 'running', foreign: true })
     await expect(provisioner.ensure(target)).rejects.toThrow(/does not own/)
     expect(calls.some((call) => call.args[0] === 'rm')).toBe(false)
@@ -195,8 +193,7 @@ describe('Provisioner.collectIdle', () => {
   })
 
   it('never reclaims a container whose work is still running', async () => {
-    // A build, an install, or a dev server held open in a terminal outlives
-    // `idleTtlMs`; the lease is what keeps its container in place.
+    // a build, install, or dev server outlives `idleTtlMs`; the lease keeps the container in place
     const { provisioner, target } = makeProvisioner({ state: 'running' }, { idleTtlMs: -1 })
     await provisioner.ensure(target)
 
@@ -221,8 +218,7 @@ describe('Provisioner.collectIdle', () => {
   })
 
   it('leaves an old container alone while the app still holds its conversation open', async () => {
-    // A plugin reload clears the in-memory bookkeeping, which would otherwise
-    // make an open chat's container look like an orphan from an earlier run.
+    // a plugin reload clears in-memory bookkeeping, making an open chat look like an orphan
     const { provisioner, calls } = makeProvisioner({
       owned: [
         { id: 'aaa', name: 'dsh-sbx-open-chat', state: 'running', created: '2020-01-01T00:00:00Z', sessionId: 'open-chat' },
@@ -376,7 +372,7 @@ describe('Provisioner npm cache mount', () => {
     const { provisioner, target } = makeProvisioner({}, { npmCacheHost: 'F:\\cache\\npm' })
     const args = provisioner.runArgs(target)
     expect(args.some((a) => a === 'F:/cache/npm:/root/.npm')).toBe(true)
-    // The workspace mount stays the first pair.
+    // the workspace mount stays the first pair
     expect(args[args.indexOf('-v') + 1]).toBe('F:/Projects/dsh-sandbox:/workspace')
   })
 

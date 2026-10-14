@@ -1,8 +1,3 @@
-/**
- * The worktree warm install: a fresh worktree gets `npm ci` in the container,
- * in the background, with a work lease; anything else is left alone.
- */
-
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,8 +6,7 @@ import { createWarmInstall, installCommandFor } from '../src/container/warm-inst
 import type { WorktreeEntry } from '../src/container/worktrees.ts'
 import { testConfig, fakeTransport } from './helpers.ts'
 
-// The fixture worktree: a checkout with a lockfile and no node_modules, which
-// is exactly what `git worktree add` leaves behind.
+// fixture worktree: a lockfile and no node_modules, exactly what `git worktree add` leaves behind
 const root = mkdtempSync(join(tmpdir(), 'dsh-warm-'))
 const worktreePath = join(root, 'wt')
 mkdirSync(worktreePath)

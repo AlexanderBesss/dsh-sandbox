@@ -1,41 +1,16 @@
-/**
- * The one place that talks to Docker.
- *
- * The docker CLI is a native Windows binary (Docker Desktop installs
- * `docker.exe` on PATH), so every call is spawned directly: no WSL hop, no
- * kubeconfig, no in-guest shell. Each argv entry is passed as one argument;
- * multi-line payloads (agent scripts, command text) always travel through
- * stdin — passing them as arguments is where Windows argument quoting
- * corrupts them.
- *
- * Two shapes are needed:
- *
- * - {@link DockerTransport.exec} runs a short command to completion and
- *   returns its buffers — provisioning, shell commands, one-shot filesystem
- *   calls.
- * - {@link DockerTransport.spawn} hands back live streams for the long-lived
- *   in-container channels (the filesystem agent and terminal sessions).
- *
- * Unlike `kubectl exec`, `docker exec` propagates the in-container exit code
- * cleanly and appends no termination note to stderr, so no output scrubbing
- * is needed here.
- *
- * @module dsh-docker-sandbox/container/transport
- */
+// the docker CLI is a native Windows binary, so calls are spawned directly with one argv entry per argument — never through a shell.
+// docker exec propagates the in-container exit code cleanly and adds no stderr note, so no output scrubbing is needed here.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import type { SandboxConfig } from "../config.ts"
 
-/** Why a Docker call could not be made. */
 export type SandboxFailureCode =
   | "DOCKER_MISSING"
   | "DOCKER_UNREACHABLE"
   | "EXEC_TIMEOUT"
   | "EXEC_FAILED"
-  /** The container name this plugin needs is held by a container it does not own. */
   | "NAME_CONFLICT"
 
-/** A Docker call could not be made at all. */
 export class SandboxUnavailableError extends Error {
   constructor(
     message: string,
@@ -47,56 +22,38 @@ export class SandboxUnavailableError extends Error {
   }
 }
 
-/** True when the error says the container is simply not there. */
 export function isMissingContainerError(error: unknown): boolean {
   return error instanceof SandboxUnavailableError
     && /no such (container|object)|does not exist/i.test(error.detail ?? error.message)
 }
 
-/** The engine-side detail of a failed call, for messages and the UI. */
 export function failureDetail(error: unknown): string {
   return error instanceof SandboxUnavailableError ? error.detail ?? error.message : String(error)
 }
 
 export interface ExecOptions {
-  /** Written to the child's stdin, then closed. */
   stdin?: Buffer | string
-  /** Kill the child past this budget. */
   timeoutMs?: number
-  /** Caller cancellation. */
   signal?: AbortSignal
-  /** Upper bound on captured bytes per stream; beyond it the tail is dropped. */
   maxCaptureBytes?: number
 }
 
 export interface ExecResult {
-  /** Process exit code, or `null` when killed. */
   code: number | null
   stdout: Buffer
   stderr: Buffer
-  /** True when either stream exceeded `maxCaptureBytes`. */
   truncated: boolean
-  /** True when stdout alone exceeded `maxCaptureBytes`. */
   stdoutTruncated: boolean
-  /** True when stderr alone exceeded `maxCaptureBytes`. */
   stderrTruncated: boolean
 }
 
-/** A live child process with its streams and an exit promise. */
 export interface LiveProcess {
   child: ChildProcessWithoutNullStreams
   done: Promise<{ code: number | null; signal: string | null }>
-  /** Kill the local `docker` client. */
+  // kills only the local docker client, not the in-container process
   kill(signal?: NodeJS.Signals): void
 }
 
-/**
- * One stream's bounded capture.
- *
- * Each stream gets its own budget and its own overflow flag: a chatty stdout
- * must not starve stderr, and a single shared flag would report the quiet
- * stream as truncated too.
- */
 class StreamCapture {
   private readonly chunks: Buffer[] = []
   private captured = 0
@@ -111,9 +68,7 @@ class StreamCapture {
     }
     this.captured += data.length
     this.chunks.push(data)
-    // A single chunk larger than the budget must still report truncation:
-    // the whole chunk is kept (one chunk's overshoot is bounded), but the
-    // caller asked for at most `maxBytes` and did not get a complete stream.
+    // an oversized chunk is kept whole (bounded overshoot) but still flags truncation: the stream is not complete
     if (this.captured > this.maxBytes) this.truncated = true
   }
 
@@ -122,12 +77,9 @@ class StreamCapture {
   }
 }
 
-/** Classify a failed docker invocation into a named failure. */
 function classify(argv: string[], code: number | null, stderr: Buffer): SandboxUnavailableError {
   const text = stderr.toString("utf8").trim()
-  // Case-insensitive throughout: the CLI capitalizes its messages ("Cannot
-  // connect to the Docker daemon", "No such container"), and a case-sensitive
-  // match would quietly downgrade them to a generic EXEC_FAILED.
+  // case-insensitive: the CLI capitalizes its messages, and a case-sensitive match would downgrade them to EXEC_FAILED
   if (/cannot connect to the docker daemon|is the docker daemon running|error during connect|docker daemon is not running|connection refused|connection reset|npipe/i.test(text)) {
     return new SandboxUnavailableError(
       `the Docker daemon is not reachable from ${argv.join(" ")}: ${text.split("\n")[0]}`,
@@ -151,7 +103,6 @@ function classify(argv: string[], code: number | null, stderr: Buffer): SandboxU
 export class DockerTransport {
   constructor(private readonly config: Pick<SandboxConfig, "dockerArgv">) {}
 
-  /** Start one docker invocation without collecting its output. */
   spawn(argv: string[], opts: { pty?: boolean } = {}): LiveProcess {
     void opts
     const base = this.config.dockerArgv.length > 0 ? this.config.dockerArgv : ["docker"]
@@ -187,13 +138,11 @@ export class DockerTransport {
         try {
           child.kill(signal)
         } catch {
-          // Already gone.
         }
       },
     }
   }
 
-  /** Run one docker invocation and collect its output. */
   async exec(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     const live = this.spawn(argv)
     const maxCapture = opts.maxCaptureBytes ?? 32 * 1024 * 1024
@@ -203,7 +152,7 @@ export class DockerTransport {
     live.child.stdout.on("data", (data: Buffer) => out.onData(data))
     live.child.stderr.on("data", (data: Buffer) => err.onData(data))
     live.child.stdin.on("error", () => {
-      // The child may exit before reading everything it was given.
+      // the child may exit before reading all of stdin
     })
 
     if (opts.stdin !== undefined) live.child.stdin.end(opts.stdin)
@@ -247,14 +196,12 @@ export class DockerTransport {
     }
   }
 
-  /** Run one docker call, throwing a classified error on failure. */
   async docker(args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     const result = await this.exec(args, opts)
     if (result.code !== 0) throw classify(args, result.code, result.stderr)
     return result
   }
 
-  /** Run one docker call and parse its stdout as JSON. */
   async dockerJson<T>(args: string[], opts: ExecOptions = {}): Promise<T> {
     const result = await this.docker(args, opts)
     const text = result.stdout.toString("utf8").trim()
@@ -270,13 +217,7 @@ export class DockerTransport {
     }
   }
 
-  /**
-   * One `docker exec` into a container, with the command as trailing argv.
-   *
-   * `docker exec` has no `--` separator (the CLI would try to execute it), so
-   * the first container argv entry must not start with `-`; every call site
-   * here starts it with `sh`, `/bin/sh`, or `env`.
-   */
+  // docker exec has no `--` separator (the CLI would try to exec it): the first container argv entry must not start with `-`
   execInContainer(
     target: { container: string },
     containerArgv: string[],
@@ -285,7 +226,6 @@ export class DockerTransport {
     return this.docker(["exec", "-i", target.container, ...containerArgv], opts)
   }
 
-  /** One live `docker exec` into a container, streams left open. */
   spawnInContainer(
     target: { container: string },
     containerArgv: string[],

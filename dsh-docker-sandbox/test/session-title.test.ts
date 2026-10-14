@@ -3,17 +3,15 @@ import { createSessionTitleReader } from '../src/container/session-title.ts'
 import type { SandboxContext } from '../src/context.ts'
 
 interface FakeCtxOptions {
-  /** The title the app's own title service folds from the log. */
   title?: string
-  /** Fail the title-service lookup (isolated or disposed service). */
+  // the title service can be isolated or disposed at runtime
   titleThrows?: boolean
-  /** The session's durable log; absent means the session carries no reader. */
+  // the session's durable log; absent means the session carries no reader
   events?: unknown[]
-  /** Answer `undefined` for the session (it is not live in this store). */
   live?: boolean
 }
 
-/** One logged human message, in the shape `dsh-session` writes. */
+// one logged human message, in the shape `dsh-session` writes
 function userMessage(text: string, kind = 'user'): unknown {
   return { type: 'user/message', data: { source: { kind }, content: [{ type: 'text', text }] } }
 }
@@ -45,8 +43,7 @@ describe('createSessionTitleReader', () => {
   })
 
   it('falls back to the first human message while the app has no title yet', () => {
-    // The worktree is created on the first tool call, before the title service
-    // has appended its event; the message that started the turn is already logged.
+    // the worktree is created before the title service appends its event; the first message is logged
     const reader = createSessionTitleReader(fakeCtx({
       events: [userMessage('Rename the branch to something readable')],
     }))

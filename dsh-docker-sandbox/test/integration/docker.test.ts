@@ -1,12 +1,3 @@
-/**
- * Integration test against the live Docker engine.
- *
- * Skipped unless `DSH_DOCKER=1`, because it needs Docker Desktop (or another
- * reachable engine). Run it with `pnpm test:integration`. It provisions a real
- * per-chat container, exercises the command runner, cancellation, and the
- * bind mount, and deletes the container again.
- */
-
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -70,7 +61,7 @@ describe.skipIf(!enabled)('live Docker sandbox', () => {
   it('stops a running command by signalling its process group', async () => {
     const live = transport.spawnInContainer(target, ['sh', '/tmp/.dsh-run.sh', 'op-kill', '-', 'sleep', '120'])
 
-    // The runner records the pid it exec'd; that pid is also the process group.
+    // the runner records the pid it exec'd; that pid is also the process group
     let pid = ''
     for (let attempt = 0; attempt < 20 && pid === ''; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -93,8 +84,7 @@ describe.skipIf(!enabled)('live Docker sandbox', () => {
   })
 
   it('shares the workspace bytes between host operations and the container', async () => {
-    // The fs seam is host-backed now; this is the guarantee the design rests
-    // on: the bind mount carries the same bytes in both directions.
+    // the guarantee the design rests on: the bind mount carries the same bytes in both directions
     const name = `.dsh-mount-${Date.now()}.txt`
     const hostFile = join(process.cwd(), name)
     await writeFile(hostFile, 'hello from host')
