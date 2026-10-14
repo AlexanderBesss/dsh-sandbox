@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliCommandError, type CliResult, type CliRunner } from '../src/container/git.ts'
 import { PathMapper } from '../src/container/paths.ts'
 import { slugDigest } from '../src/container/session.ts'
+import type { WorktreeEntry } from '../src/container/worktrees.ts'
 import { WorktreeManager, compareUrlFor } from '../src/container/worktrees.ts'
 import { testConfig } from './helpers.ts'
 
@@ -23,6 +24,13 @@ interface FakeGitOptions {
   log?: string
   stat?: string
   pushedBranch?: boolean
+  fetchFails?: boolean
+  originBranch?: string
+  behind?: string
+  mergeFails?: boolean
+  mergeFailsClean?: boolean
+  merging?: boolean
+  conflicts?: string[]
 }
 
 interface FakeCli {
@@ -34,6 +42,7 @@ interface FakeCli {
 function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): FakeCli {
   const calls: string[][] = []
   const ok = (stdout = ''): CliResult => ({ stdout, stderr: '', code: 0 })
+  let mergingNow = options.merging === true
   const handle = (args: string[]): CliResult => {
     calls.push(args)
     if (options.gitMissing === true) throw new CliCommandError('git is not available', 'GIT_MISSING')
@@ -41,9 +50,31 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
       if (options.notGit === true) throw new CliCommandError('not a git repository', 'GIT_FAILED', 'fatal: not a git repository')
       return ok(`${options.repoRoot}\n`)
     }
+    if (args[0] === 'rev-parse' && args[1] === '-q') {
+      if (mergingNow) return ok('feedfacefeed\n')
+      throw new CliCommandError('no MERGE_HEAD', 'GIT_FAILED', '')
+    }
     if (args[0] === 'rev-parse' && args[1] === '--verify') {
       if (options.branchExists === true) return ok('deadbeef\n')
       throw new CliCommandError('bad revision', 'GIT_FAILED', '')
+    }
+    if (args[0] === 'rev-parse' && args[1] === '--absolute-git-dir') {
+      throw new CliCommandError('not a worktree yet', 'GIT_FAILED', '')
+    }
+    if (args[0] === 'rev-parse') return ok('cafebabe00\n')
+    if (args[0] === 'fetch') {
+      if (options.fetchFails === true) throw new CliCommandError('fetch failed', 'GIT_FAILED', 'fatal: unable to access origin')
+      return ok()
+    }
+    if (args[0] === 'merge') {
+      if (options.mergeFailsClean === true) {
+        throw new CliCommandError('merge failed', 'GIT_FAILED', 'error: Your local changes to the following files would be overwritten by merge')
+      }
+      if (options.mergeFails === true) {
+        mergingNow = true
+        throw new CliCommandError('merge failed', 'GIT_FAILED', 'CONFLICT (content): Merge conflict')
+      }
+      return ok()
     }
     if (args[0] === 'worktree' && args[1] === 'add') {
       const path = args.includes('-B') ? args[4]! : args[2]!
@@ -53,7 +84,10 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
     if (args[0] === 'worktree') return ok()
     if (args[0] === 'branch') return ok()
     if (args[0] === 'status') return ok(options.dirty ?? '')
-    if (args[0] === 'rev-list') return ok(`${options.unpushed ?? '0'}\n`)
+    if (args[0] === 'rev-list') {
+      if (args[2]?.includes('..')) return ok(`${options.behind ?? '0'}\n`)
+      return ok(`${options.unpushed ?? '0'}\n`)
+    }
     if (args[0] === 'remote') {
       if (options.remote === undefined) throw new CliCommandError('no such remote', 'GIT_FAILED', "error: No such remote 'origin'")
       return ok(`${options.remote}\n`)
@@ -68,10 +102,17 @@ function fakeCli(options: FakeGitOptions, ghUrl?: string, ghFails?: string): Fak
     }
     if (args[0] === 'symbolic-ref') return ok(options.mainBranch === undefined ? '' : `${options.mainBranch}\n`)
     if (args[0] === 'log') return ok(`${options.log ?? ''}\n`)
-    if (args[0] === 'diff') return ok(`${options.stat ?? ''}\n`)
+    if (args[0] === 'diff') {
+      if (args.includes('--diff-filter=U')) return ok(`${(options.conflicts ?? []).join('\n')}\n`)
+      return ok(`${options.stat ?? ''}\n`)
+    }
     if (args[0] === 'for-each-ref') {
       if (args[1] === '--quiet') throw new CliCommandError("unknown option `quiet'", 'GIT_FAILED', "error: unknown option `quiet'")
-      return ok(options.pushedBranch === true ? `refs/remotes/origin/${args[args.length - 1]}\n` : '')
+      const pattern = args[args.length - 1]!
+      if (options.originBranch !== undefined && pattern === `refs/remotes/origin/${options.originBranch}`) {
+        return ok(`${pattern}\n`)
+      }
+      return ok(options.pushedBranch === true ? `${pattern}\n` : '')
     }
     if (args[0] === 'config' && args[1] === '--get') {
       const value = options.gitConfig?.[args[2]!]
@@ -434,6 +475,181 @@ describe('WorktreeManager.mergeRequest', () => {
     const { git, gh } = fakeCli({ repoRoot: 'F:\\Projects\\x', notGit: true })
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
     await expect(manager.mergeRequest('session-3', 'F:\\Projects\\x')).rejects.toThrow(/no git worktree/)
+  })
+})
+
+describe('WorktreeManager sync with main', () => {
+  const syncConfig = { ...wtConfig, worktreeSync: true }
+
+  function syncManager(options: FakeGitOptions, extra: { notify?: (sessionId: string, text: string) => boolean; onTreeChanged?: (entry: WorktreeEntry) => void } = {}) {
+    const fake = fakeCli(options)
+    const manager = new WorktreeManager({
+      git: fake.git, gh: fake.gh, config: testConfig(syncConfig),
+      paths: new PathMapper('workspace', '/workspace'), ...extra,
+    })
+    return { fake, manager }
+  }
+
+  it('bases a new worktree on origin/main once the fetch lands', () => {
+    const repoRoot = tempRoot()
+    const { fake, manager } = syncManager({ repoRoot, mainBranch: 'main', originBranch: 'main' })
+    const entry = manager.ensure('session-3', repoRoot)!
+    expect(fake.calls).toContainEqual(['fetch', 'origin'])
+    expect(fake.calls).toContainEqual(['worktree', 'add', '-B', entry.branch, entry.worktreePath, 'origin/main'])
+    expect(entry.baseRef).toBe('origin/main')
+  })
+
+  it('falls back to the local HEAD when origin cannot be reached', () => {
+    const repoRoot = tempRoot()
+    const { fake, manager } = syncManager({ repoRoot, mainBranch: 'main', originBranch: 'main', fetchFails: true })
+    const entry = manager.ensure('session-3', repoRoot)!
+    expect(fake.calls).toContainEqual(['worktree', 'add', '-B', entry.branch, entry.worktreePath, 'HEAD'])
+    expect(entry.baseRef).toBeUndefined()
+  })
+
+  it('merges main into a clean session branch', async () => {
+    const repoRoot = tempRoot()
+    const { fake, manager } = syncManager({ repoRoot, mainBranch: 'main', originBranch: 'main', behind: '3' })
+    manager.ensure('session-3', repoRoot)
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'merged', behind: 3 })
+    expect(fake.calls).toContainEqual(['merge', '--no-edit', 'origin/main'])
+  })
+
+  it('leaves a conflicted merge to the session agent', async () => {
+    const repoRoot = tempRoot()
+    const notices: string[] = []
+    const { fake, manager } = syncManager(
+      { repoRoot, mainBranch: 'main', originBranch: 'main', behind: '2', mergeFails: true, conflicts: ['src/a.ts', 'src/b.ts'] },
+      { notify: (_id, text) => { notices.push(text); return true } },
+    )
+    manager.ensure('session-3', repoRoot)
+    const outcome = await manager.syncFor('session-3', repoRoot)
+    expect(outcome?.state).toBe('conflict')
+    expect(outcome?.conflicts).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(fake.calls).toContainEqual(['merge', '--no-edit', 'origin/main'])
+    expect(fake.calls).toContainEqual(['diff', '--name-only', '--diff-filter=U'])
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('src/a.ts')
+    expect(notices[0]).toContain('git commit')
+  })
+
+  it('reports a merge that failed without conflicting, and tells no one about a conflict', async () => {
+    const repoRoot = tempRoot()
+    const notices: string[] = []
+    const { fake, manager } = syncManager(
+      { repoRoot, mainBranch: 'main', originBranch: 'main', behind: '2', mergeFailsClean: true },
+      { notify: (_id, text) => { notices.push(text); return true } },
+    )
+    manager.ensure('session-3', repoRoot)
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'failed', behind: 2 })
+    expect(fake.calls).toContainEqual(['merge', '--no-edit', 'origin/main'])
+    expect(notices).toHaveLength(0)
+  })
+
+  it('re-notifies about a mid-merge worktree until the chat received the notice', async () => {
+    const repoRoot = tempRoot()
+    const notices: string[] = []
+    let deliver = false
+    const { manager } = syncManager(
+      { repoRoot, mainBranch: 'main', originBranch: 'main', merging: true, conflicts: ['src/a.ts'] },
+      { notify: (_id, text) => { notices.push(text); return deliver } },
+    )
+    manager.ensure('session-3', repoRoot)
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'conflict' })
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'conflict' })
+    expect(notices).toHaveLength(2)
+    expect(notices[0]).toContain('mid-merge')
+    deliver = true
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'conflict' })
+    expect(notices).toHaveLength(3)
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'conflict' })
+    expect(notices).toHaveLength(3)
+  })
+
+  it('defers while the worktree is dirty, and notifies once per main head', async () => {
+    const repoRoot = tempRoot()
+    const notices: string[] = []
+    const { fake, manager } = syncManager(
+      { repoRoot, mainBranch: 'main', originBranch: 'main', behind: '2', dirty: ' M work in progress\n' },
+      { notify: (_id, text) => { notices.push(text); return true } },
+    )
+    manager.ensure('session-3', repoRoot)
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'deferred', behind: 2 })
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'deferred', behind: 2 })
+    expect(fake.calls.some((call) => call[0] === 'merge')).toBe(false)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('uncommitted changes')
+  })
+
+  it('throttles fetches, so repeated syncs reuse the last one', async () => {
+    const repoRoot = tempRoot()
+    const { fake, manager } = syncManager({ repoRoot, mainBranch: 'main', originBranch: 'main' })
+    manager.ensure('session-3', repoRoot)
+    await manager.syncFor('session-3', repoRoot)
+    await manager.syncFor('session-3', repoRoot)
+    expect(fake.calls.filter((call) => call[0] === 'fetch')).toHaveLength(1)
+  })
+
+  it('syncLive skips archived and busy sessions and merges the rest', async () => {
+    const repoRoot = tempRoot()
+    const { fake, manager } = syncManager({ repoRoot, mainBranch: 'main', originBranch: 'main', behind: '1' })
+    manager.ensure('session-3', repoRoot)
+    expect(await manager.syncLive(new Set(['session-3']), () => true)).toEqual([])
+    expect(await manager.syncLive(new Set(), () => false)).toEqual([])
+    expect(fake.calls.some((call) => call[0] === 'merge')).toBe(false)
+    expect(await manager.syncLive(new Set(), () => true)).toEqual([{ state: 'merged', behind: 1 }])
+  })
+
+  it('refuses the merge button while the worktree is mid-merge', async () => {
+    const repoRoot = tempRoot()
+    const { manager } = syncManager({ repoRoot, merging: true })
+    await expect(manager.mergeRequest('session-3', repoRoot)).rejects.toThrow(/mid-merge with main/)
+  })
+
+  it('reinstalls when a merged lockfile differs from the installed one', async () => {
+    const repoRoot = tempRoot()
+    const changed: string[] = []
+    const { manager } = syncManager(
+      { repoRoot, mainBranch: 'main', originBranch: 'main', behind: '1' },
+      { onTreeChanged: (entry) => changed.push(entry.sessionId) },
+    )
+    const entry = manager.ensure('session-3', repoRoot)!
+    writeFileSync(join(entry.worktreePath, 'package-lock.json'), '{"lockfileVersion":3}')
+    manager.markInstalled('session-3', repoRoot)
+    writeFileSync(join(entry.worktreePath, 'package-lock.json'), '{"lockfileVersion":3,"changed":true}')
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'merged', behind: 1 })
+    expect(changed).toEqual(['session-3'])
+  })
+
+  it('retries the reinstall on later syncs while the install never succeeded', async () => {
+    const repoRoot = tempRoot()
+    const changed: string[] = []
+    const { manager } = syncManager(
+      { repoRoot, mainBranch: 'main', originBranch: 'main', behind: '1' },
+      { onTreeChanged: (entry) => changed.push(entry.sessionId) },
+    )
+    const entry = manager.ensure('session-3', repoRoot)!
+    writeFileSync(join(entry.worktreePath, 'package-lock.json'), '{"lockfileVersion":3}')
+    manager.markInstalled('session-3', repoRoot)
+    writeFileSync(join(entry.worktreePath, 'package-lock.json'), '{"lockfileVersion":3,"changed":true}')
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'merged', behind: 1 })
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'merged', behind: 1 })
+    expect(changed).toEqual(['session-3', 'session-3'])
+    manager.markInstalled('session-3', repoRoot)
+    expect(await manager.syncFor('session-3', repoRoot)).toEqual({ state: 'merged', behind: 1 })
+    expect(changed).toHaveLength(2)
+  })
+
+  it('is inert while worktreeSync is off', async () => {
+    const repoRoot = tempRoot()
+    const fake = fakeCli({ repoRoot, mainBranch: 'main', originBranch: 'main', behind: '5' })
+    const manager = new WorktreeManager({
+      git: fake.git, gh: fake.gh, config: testConfig({ ...wtConfig, worktreeSync: false }),
+      paths: new PathMapper('workspace', '/workspace'),
+    })
+    manager.ensure('session-3', repoRoot)
+    expect(await manager.syncFor('session-3', repoRoot)).toBeUndefined()
+    expect(fake.calls.some((call) => call[0] === 'fetch')).toBe(false)
   })
 })
 

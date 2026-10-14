@@ -50,4 +50,35 @@ describe('createEngineGate', () => {
     on = true
     await expect(gate(payload, enter)).rejects.toThrow(/Docker engine is not reachable/)
   })
+
+  it('syncs the session worktree once per turn, before the step runs', async () => {
+    const synced: string[] = []
+    const worktrees = {
+      syncFor: async (sessionId: string, workspace: string) => {
+        synced.push(`${sessionId}@${workspace}`)
+        return { state: 'up-to-date' as const }
+      },
+    }
+    const gate = createEngineGate(
+      fakeProvisioner({ reachable: true }),
+      testConfig({ worktree: true }),
+      { worktrees: worktrees as never, workspaceFor: () => 'F:\\Projects\\x' },
+    )
+    await gate(payload, enter)
+    await gate({ ...payload, step: 2 }, enter)
+    await gate({ ...payload, turn: 2 }, enter)
+    expect(synced).toEqual(['session-3@F:\\Projects\\x', 'session-3@F:\\Projects\\x'])
+  })
+
+  it('does not sync when the turn was refused for an unreachable engine', async () => {
+    const synced: string[] = []
+    const worktrees = { syncFor: async (sessionId: string) => { synced.push(sessionId) } }
+    const gate = createEngineGate(
+      fakeProvisioner({ reachable: false }),
+      testConfig({ worktree: true }),
+      { worktrees: worktrees as never, workspaceFor: () => 'F:\\Projects\\x' },
+    )
+    await expect(gate(payload, enter)).rejects.toThrow(/Docker engine is not reachable/)
+    expect(synced).toEqual([])
+  })
 })

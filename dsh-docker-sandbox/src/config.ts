@@ -60,6 +60,10 @@ export const Config = Schema.object({
 
   worktreeBranchPrefix: Schema.string().default("dsh-sbx/"),
 
+  worktreeSync: Schema.boolean().default(true).volatile(),
+
+  worktreeSyncIntervalMs: Schema.number().min(1000).default(300000),
+
   npmCacheHost: Schema.string().default(join(homedir(), ".dsh-docker-sandbox", "npm-cache")),
 
   worktreeInstall: Schema.boolean().default(true).volatile(),

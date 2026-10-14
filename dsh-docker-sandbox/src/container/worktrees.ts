@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SandboxConfig } from "../config.ts"
@@ -19,6 +20,10 @@ export interface WorktreeEntry {
   createdAt: number
   hostGitDir: string
   gitConfig: Record<string, string>
+  baseRef?: string
+  lockHash?: string
+  notifiedBehind?: string
+  notifiedMerging?: boolean
 }
 
 export interface WorktreeInfo {
@@ -27,6 +32,16 @@ export interface WorktreeInfo {
   mainWorkspace: string
   dirty: boolean
   unpushed: boolean
+  merging: boolean
+  behind?: number
+}
+
+export type SyncState = "up-to-date" | "merged" | "conflict" | "failed" | "deferred" | "unavailable"
+
+export interface SyncOutcome {
+  state: SyncState
+  behind?: number
+  conflicts?: string[]
 }
 
 export interface MergeRequestResult {
@@ -51,6 +66,8 @@ export interface WorktreeDeps {
   paths: PathMapper
   titleFor?: (sessionId: string) => string | undefined
   brief?: PrBrief
+  notify?: (sessionId: string, text: string) => boolean
+  onTreeChanged?: (entry: WorktreeEntry) => void
 }
 
 const REGISTRY_FILE = "registry.json"
@@ -58,6 +75,8 @@ const REGISTRY_FILE = "registry.json"
 const QUICK_MS = 15000
 const ADD_MS = 120000
 const PUSH_MS = 120000
+const FETCH_MS = 30000
+const MERGE_MS = 60000
 
 export function compareUrlFor(remoteUrl: string, branch: string): string | undefined {
   const ssh = /^git@([a-zA-Z0-9.-]+):(.+?)(?:\.git)?$/i.exec(remoteUrl)
@@ -78,6 +97,8 @@ export class WorktreeManager {
   private readonly loadedRoots = new Set<string>()
   private readonly repoRoots = new Set<string>()
   private readonly warned = new Set<string>()
+  private readonly lastFetch = new Map<string, { at: number; ok: boolean }>()
+  private readonly fetchInflight = new Map<string, Promise<boolean>>()
 
   constructor(private readonly deps: WorktreeDeps) {}
 
@@ -144,19 +165,276 @@ export class WorktreeManager {
     if (entry === undefined) return undefined
     const status = await this.tryGit(["status", "--porcelain"], entry.worktreePath)
     const count = await this.tryGit(["rev-list", "--count", "HEAD", "--not", "--remotes"], entry.worktreePath)
+    const merging = await this.isMerging(entry)
+    const originRef = this.deps.config.worktreeSync.get() ? this.cachedOriginRef(entry.repoRoot) : undefined
+    const behind = originRef === undefined ? undefined : await this.countBehind(entry, originRef)
     return {
       path: entry.worktreePath,
       branch: entry.branch,
       mainWorkspace: entry.mainWorkspace,
       dirty: status !== undefined && status.stdout.trim() !== "",
       unpushed: count !== undefined && Number.parseInt(count.stdout.trim(), 10) > 0,
+      merging,
+      ...(behind === undefined ? {} : { behind }),
     }
+  }
+
+  private cachedOriginRef(repoRoot: string): string | undefined {
+    if (this.lastFetch.get(repoRoot)?.ok !== true) return undefined
+    return this.resolvedOriginRef(repoRoot)
   }
 
   async reviewFor(sessionId: string, workspace: string): Promise<{ entry: WorktreeEntry; changes: SessionChanges } | undefined> {
     const entry = this.lookup(sessionId, workspace)
     if (entry === undefined) return undefined
     return { entry, changes: await collectChanges(this.deps.git, entry) }
+  }
+
+  async syncFor(sessionId: string, workspace: string): Promise<SyncOutcome | undefined> {
+    if (!this.enabled || !this.deps.config.worktreeSync.get()) return undefined
+    const entry = this.lookup(sessionId, workspace)
+    if (entry === undefined) return undefined
+    return this.syncEntry(entry)
+  }
+
+  async syncLive(archived: ReadonlySet<string>, isIdleLive: (sessionId: string) => boolean): Promise<SyncOutcome[]> {
+    if (!this.enabled || !this.deps.config.worktreeSync.get()) return []
+    for (const repoRoot of [...this.repoRoots]) this.loadRegistry(repoRoot)
+    const outcomes: SyncOutcome[] = []
+    for (const [sessionId, entry] of [...this.entries]) {
+      if (archived.has(sessionId) || !isIdleLive(sessionId)) continue
+      outcomes.push(await this.syncEntry(entry))
+    }
+    return outcomes
+  }
+
+  markInstalled(sessionId: string, workspace: string): void {
+    const entry = this.lookup(sessionId, workspace)
+    if (entry === undefined) return
+    const hash = lockfileHash(entry.worktreePath)
+    if (hash === undefined) return
+    entry.lockHash = hash
+    this.saveRegistry(entry.repoRoot)
+  }
+
+  private async syncEntry(entry: WorktreeEntry): Promise<SyncOutcome> {
+    if (await this.isMerging(entry)) {
+      await this.notifyMidMerge(entry)
+      return { state: "conflict" }
+    }
+    if (entry.notifiedMerging === true) {
+      entry.notifiedMerging = undefined
+      this.saveRegistry(entry.repoRoot)
+    }
+    const originRef = await this.originRefFor(entry.repoRoot)
+    if (originRef === undefined) return { state: "unavailable" }
+    const behind = await this.countBehind(entry, originRef)
+    if (behind === undefined) return { state: "unavailable" }
+    if (behind === 0) {
+      if (entry.notifiedBehind !== undefined) {
+        entry.notifiedBehind = undefined
+        this.saveRegistry(entry.repoRoot)
+      }
+      this.reinstallIfStale(entry)
+      return { state: "up-to-date" }
+    }
+    const status = await this.tryGit(["status", "--porcelain"], entry.worktreePath)
+    if (status === undefined) return { state: "unavailable" }
+    if (status.stdout.trim() !== "") {
+      this.notifyBehind(entry, originRef, behind)
+      return { state: "deferred", behind }
+    }
+    try {
+      await this.deps.git.run(["merge", "--no-edit", originRef], { cwd: entry.worktreePath, timeoutMs: MERGE_MS })
+    } catch (error) {
+      if (!(await this.isMerging(entry))) {
+        const detail = error instanceof CliCommandError ? error.detail ?? error.message : String(error)
+        this.deps.logger?.warn?.(
+          `dsh-docker-sandbox: syncing session ${entry.sessionId} to ${originRef} failed: ${detail}; the worktree was left untouched`,
+        )
+        return { state: "failed", behind }
+      }
+      const conflicts = await this.conflictedFiles(entry)
+      this.deps.logger?.warn?.(
+        `dsh-docker-sandbox: syncing session ${entry.sessionId} to ${originRef} conflicted in ${conflicts.length} file(s); `
+        + "the session was asked to resolve them",
+      )
+      const notice = [
+        `dsh-docker-sandbox: main moved ahead of this session's branch by ${behind} commit(s), and I merged ${originRef} into ${entry.branch}.`,
+        ...(conflicts.length === 0 ? ["The merge left conflicts; `git status` shows which files."] : ["These files conflict:", ...conflicts.map((file) => `  ${file}`)]),
+        `The worktree is mid-merge. Resolve the conflict markers under ${this.deps.config.containerWorkspace} and finish with \`git commit\``,
+        "(or `git merge --abort` to back the merge out). Do not open a merge request while it is unresolved.",
+      ].join("\n")
+      if (this.deps.notify?.(entry.sessionId, notice) === true) {
+        entry.notifiedMerging = true
+        this.saveRegistry(entry.repoRoot)
+      }
+      return { state: "conflict", behind, conflicts }
+    }
+    entry.notifiedBehind = undefined
+    entry.baseRef = originRef
+    this.saveRegistry(entry.repoRoot)
+    this.deps.logger?.info?.(
+      `dsh-docker-sandbox: session ${entry.sessionId} branch ${entry.branch} merged ${behind} commit(s) from ${originRef}`,
+    )
+    this.reinstallIfStale(entry)
+    return { state: "merged", behind }
+  }
+
+  private async notifyMidMerge(entry: WorktreeEntry): Promise<void> {
+    if (entry.notifiedMerging === true) return
+    const conflicts = await this.conflictedFiles(entry)
+    const notice = [
+      "dsh-docker-sandbox: this session's worktree is mid-merge with unresolved conflicts.",
+      ...(conflicts.length === 0 ? ["Run `git status` to see which files conflict."] : ["These files conflict:", ...conflicts.map((file) => `  ${file}`)]),
+      `Resolve the conflict markers under ${this.deps.config.containerWorkspace} and finish with \`git commit\``,
+      "(or `git merge --abort` to back the merge out). Do not open a merge request while it is unresolved.",
+    ].join("\n")
+    if (this.deps.notify?.(entry.sessionId, notice) === true) {
+      entry.notifiedMerging = true
+      this.saveRegistry(entry.repoRoot)
+    }
+  }
+
+  private notifyBehind(entry: WorktreeEntry, originRef: string, behind: number): void {
+    const sha = this.revParse(entry.repoRoot, originRef)
+    if (sha === undefined || entry.notifiedBehind === sha) return
+    entry.notifiedBehind = sha
+    this.saveRegistry(entry.repoRoot)
+    this.deps.notify?.(entry.sessionId, [
+      `dsh-docker-sandbox: main moved ahead of this session's branch by ${behind} commit(s).`,
+      "The worktree has uncommitted changes, so nothing was merged. Commit your work;",
+      `the next sync will merge ${originRef} into ${entry.branch} (and tell you if it conflicts).`,
+    ].join("\n"))
+  }
+
+  private reinstallIfStale(entry: WorktreeEntry): void {
+    const hash = lockfileHash(entry.worktreePath)
+    if (hash === undefined) return
+    if (entry.lockHash === undefined) {
+      entry.lockHash = hash
+      this.saveRegistry(entry.repoRoot)
+      return
+    }
+    // lockHash stays at the installed lockfile until the install succeeds
+    // (markInstalled records it), so a failed reinstall retries on the next sync.
+    if (entry.lockHash !== hash) this.deps.onTreeChanged?.(entry)
+  }
+
+  private originRefForSync(repoRoot: string): string | undefined {
+    if (!this.fetchOriginSync(repoRoot)) return undefined
+    return this.resolvedOriginRef(repoRoot)
+  }
+
+  private async originRefFor(repoRoot: string): Promise<string | undefined> {
+    if (!await this.fetchOrigin(repoRoot)) return undefined
+    return this.resolvedOriginRef(repoRoot)
+  }
+
+  private resolvedOriginRef(repoRoot: string): string | undefined {
+    const branch = this.mainBranchFor(repoRoot)
+    if (branch === undefined || !this.hasOriginRef(repoRoot, branch)) return undefined
+    return `origin/${branch}`
+  }
+
+  private fetchBudget(repoRoot: string): boolean | undefined {
+    const seen = this.lastFetch.get(repoRoot)
+    if (seen !== undefined && Date.now() - seen.at < this.deps.config.worktreeSyncIntervalMs) return seen.ok
+    return undefined
+  }
+
+  private recordFetch(repoRoot: string, ok: boolean, error?: unknown): boolean {
+    if (!ok) {
+      this.warnOnce(`${repoRoot}\u0000fetch`, `could not fetch origin in ${repoRoot}: ${error instanceof CliCommandError ? error.detail ?? error.message : String(error)}; worktrees keep their current base`)
+    }
+    this.lastFetch.set(repoRoot, { at: Date.now(), ok })
+    return ok
+  }
+
+  private fetchOriginSync(repoRoot: string): boolean {
+    const budget = this.fetchBudget(repoRoot)
+    if (budget !== undefined) return budget
+    try {
+      this.deps.git.runSync(["fetch", "origin"], { cwd: repoRoot, timeoutMs: FETCH_MS })
+      return this.recordFetch(repoRoot, true)
+    } catch (error) {
+      return this.recordFetch(repoRoot, false, error)
+    }
+  }
+
+  // The turn-start and GC sync paths must not block the host event loop on a
+  // network fetch; only worktree creation (already synchronous) uses the sync one.
+  private fetchOrigin(repoRoot: string): Promise<boolean> {
+    const running = this.fetchInflight.get(repoRoot)
+    if (running !== undefined) return running
+    const budget = this.fetchBudget(repoRoot)
+    if (budget !== undefined) return Promise.resolve(budget)
+    const run = this.deps.git
+      .run(["fetch", "origin"], { cwd: repoRoot, timeoutMs: FETCH_MS })
+      .then(
+        () => this.recordFetch(repoRoot, true),
+        (error: unknown) => this.recordFetch(repoRoot, false, error),
+      )
+    this.fetchInflight.set(repoRoot, run)
+    run.finally(() => {
+      if (this.fetchInflight.get(repoRoot) === run) this.fetchInflight.delete(repoRoot)
+    })
+    return run
+  }
+
+  private mainBranchFor(repoRoot: string): string | undefined {
+    try {
+      const out = this.deps.git.runSync(["symbolic-ref", "--short", "HEAD"], { cwd: repoRoot, timeoutMs: QUICK_MS }).stdout.trim()
+      return out === "" ? undefined : out
+    } catch {
+      return undefined
+    }
+  }
+
+  private hasOriginRef(repoRoot: string, branch: string): boolean {
+    try {
+      const refs = this.deps.git.runSync(["for-each-ref", "--count=1", `refs/remotes/origin/${branch}`], {
+        cwd: repoRoot,
+        timeoutMs: QUICK_MS,
+      })
+      return refs.stdout.trim() !== ""
+    } catch {
+      return false
+    }
+  }
+
+  private async countBehind(entry: WorktreeEntry, originRef: string): Promise<number | undefined> {
+    const count = await this.tryGit(["rev-list", "--count", `HEAD..${originRef}`], entry.worktreePath)
+    if (count === undefined) return undefined
+    const n = Number.parseInt(count.stdout.trim(), 10)
+    return Number.isNaN(n) ? undefined : n
+  }
+
+  private async isMerging(entry: WorktreeEntry): Promise<boolean> {
+    try {
+      const head = await this.deps.git.run(["rev-parse", "-q", "--verify", "MERGE_HEAD"], {
+        cwd: entry.worktreePath,
+        timeoutMs: QUICK_MS,
+      })
+      return head.stdout.trim() !== ""
+    } catch {
+      return false
+    }
+  }
+
+  private async conflictedFiles(entry: WorktreeEntry): Promise<string[]> {
+    const names = await this.tryGit(["diff", "--name-only", "--diff-filter=U"], entry.worktreePath)
+    if (names === undefined) return []
+    return names.stdout.trim().split("\n").filter((line) => line !== "")
+  }
+
+  private revParse(repoRoot: string, ref: string): string | undefined {
+    try {
+      const out = this.deps.git.runSync(["rev-parse", ref], { cwd: repoRoot, timeoutMs: QUICK_MS }).stdout.trim()
+      return out === "" ? undefined : out
+    } catch {
+      return undefined
+    }
   }
 
   async mergeRequest(sessionId: string, workspace: string): Promise<MergeRequestResult> {
@@ -168,6 +446,13 @@ export class WorktreeManager {
           ?? `session ${sessionId} has no git worktree (worktree mode is off, or its workspace is not a git checkout)`,
         "GIT_FAILED",
         why,
+      )
+    }
+
+    if (await this.isMerging(entry)) {
+      throw new CliCommandError(
+        `session ${sessionId} is mid-merge with main: resolve the conflict markers in the conversation and commit before opening a merge request`,
+        "GIT_FAILED",
       )
     }
 
@@ -372,8 +657,13 @@ export class WorktreeManager {
       }
       const status = await this.tryGit(["status", "--porcelain"], entry.worktreePath)
       if (status === undefined || status.stdout.trim() !== "") continue
+      if (await this.isMerging(entry)) continue
       const merged = await this.tryGit(["merge-base", "--is-ancestor", entry.branch, "HEAD"], entry.repoRoot)
-      if (merged === undefined) continue
+      const originRef = this.cachedOriginRef(entry.repoRoot)
+      const mergedUpstream = merged === undefined && originRef !== undefined
+        ? await this.tryGit(["merge-base", "--is-ancestor", entry.branch, originRef], entry.repoRoot)
+        : undefined
+      if (merged === undefined && mergedUpstream === undefined) continue
       await this.tryGit(["worktree", "remove", entry.worktreePath], entry.repoRoot)
       await this.tryGit(["branch", "-D", entry.branch], entry.repoRoot)
       this.entries.delete(sessionId)
@@ -408,6 +698,7 @@ export class WorktreeManager {
   private create(sessionId: string, workspace: string, repoRoot: string): WorktreeEntry {
     const slug = branchSlugFor(this.deps.titleFor?.(sessionId), sessionId)
     const worktreePath = join(this.treesRootFor(repoRoot), slug)
+    const baseRef = this.deps.config.worktreeSync.get() ? this.originRefForSync(repoRoot) : undefined
     const entry: WorktreeEntry = {
       sessionId,
       mainWorkspace: workspace,
@@ -417,8 +708,9 @@ export class WorktreeManager {
       createdAt: Date.now(),
       hostGitDir: this.gitDirFor({ worktreePath, repoRoot }),
       gitConfig: this.hostGitConfig(repoRoot),
+      ...(baseRef === undefined ? {} : { baseRef }),
     }
-    this.addWorktree(entry)
+    this.addWorktree(entry, baseRef)
     entry.hostGitDir = this.gitDirFor(entry)
     this.entries.set(sessionId, entry)
     this.registerMount(entry)
@@ -468,7 +760,7 @@ export class WorktreeManager {
     return entry
   }
 
-  private addWorktree(entry: WorktreeEntry): void {
+  private addWorktree(entry: WorktreeEntry, base?: string): void {
     let branchExists = false
     try {
       branchExists = this.deps.git.runSync(["rev-parse", "--verify", "--quiet", `refs/heads/${entry.branch}`], {
@@ -480,7 +772,7 @@ export class WorktreeManager {
     }
     const add = (): void => {
       if (branchExists) this.deps.git.runSync(["worktree", "add", entry.worktreePath, entry.branch], { cwd: entry.repoRoot, timeoutMs: ADD_MS })
-      else this.deps.git.runSync(["worktree", "add", "-B", entry.branch, entry.worktreePath, "HEAD"], { cwd: entry.repoRoot, timeoutMs: ADD_MS })
+      else this.deps.git.runSync(["worktree", "add", "-B", entry.branch, entry.worktreePath, base ?? "HEAD"], { cwd: entry.repoRoot, timeoutMs: ADD_MS })
     }
     try {
       add()
@@ -543,5 +835,13 @@ export class WorktreeManager {
     if (this.warned.has(key)) return
     this.warned.add(key)
     this.deps.logger?.warn?.(`dsh-docker-sandbox: ${message}`)
+  }
+}
+
+export function lockfileHash(worktreePath: string): string | undefined {
+  try {
+    return createHash("sha256").update(readFileSync(join(worktreePath, "package-lock.json"))).digest("hex")
+  } catch {
+    return undefined
   }
 }

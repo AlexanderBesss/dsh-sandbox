@@ -63,6 +63,8 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
     `worktree ${worktree.path}\n`,
     worktree.dirty ? "uncommitted changes will be committed\n" : "",
     worktree.unpushed ? "unpushed commits on the branch\n" : "",
+    worktree.merging ? "mid-merge with main: resolve the conflicts in the chat first\n" : "",
+    worktree.behind !== undefined && worktree.behind > 0 ? `${worktree.behind} commit(s) behind main\n` : "",
     result?.prUrl === undefined ? "" : `pull request: ${result.prUrl}\n`,
     result?.prError === undefined ? "" : `no pull request: ${result.prError}\n`,
     result?.renamedFrom === undefined ? "" : `branch renamed from ${result.renamedFrom}\n`,

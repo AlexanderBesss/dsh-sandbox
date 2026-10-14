@@ -146,8 +146,10 @@ from `package.json` bundles plus `cordis.patch.yml`.
 | `worktree` | `false` | give every conversation its own `git worktree` and branch (see below); live toggle |
 | `worktreeRoot` | `""` | where worktrees live; empty = a sibling `<repoRoot>.worktrees/` per checkout, a set path is a root with one subdirectory per repo |
 | `worktreeBranchPrefix` | `dsh-sbx/` | branch namespace for the per-session worktrees; the rest of the name is the chat's title (see below) |
+| `worktreeSync` | `true` | base new worktrees on `origin/<branch>` — `<branch>` being the branch the host checkout has checked out — and keep existing ones merged with it (see below); live toggle |
+| `worktreeSyncIntervalMs` | `300000` | the minimum interval between `git fetch origin` per repo — turn-start checks and GC sweeps share one budget |
 | `npmCacheHost` | `~/.dsh-docker-sandbox/npm-cache` | host dir shared as the containers' npm cache (mounted at `/root/.npm`); empty disables it |
-| `worktreeInstall` | `true` | run `npm ci --prefer-offline` in a worktree session's container when its worktree has a lockfile but no `node_modules`; live toggle |
+| `worktreeInstall` | `true` | run `npm ci --prefer-offline` in a worktree session's container when its worktree has a lockfile but no `node_modules`, and again when a main sync changes that lockfile; live toggle |
 | `warmInstallTimeoutMs` | `600000` | budget for that background install |
 | `gitArgv` | `["git"]` | the host git CLI used for worktree bookkeeping |
 | `ghArgv` | `["gh"]` | the GitHub CLI used by the merge-request button |
@@ -204,6 +206,20 @@ F:\Projects\app.worktrees\fix-the-login-crash-1a2b3c   (branch dsh-sbx/fix-the-l
   re-downloading the graph per session. Only worktree sessions get this:
   installing into a *shared* checkout would replace the host's own
   `node_modules` with Linux binaries.
+- **Worktrees follow main.** "Main" here is the branch the host checkout has
+  checked out; a new worktree is based on `origin/<that-branch>` — one
+  `git fetch origin` per `worktreeSyncIntervalMs` per repo, shared by every
+  session; when the fetch cannot run (offline, no remote) the worktree falls
+  back to the local `HEAD` and the log says so. Existing sessions are synced at
+  the start of each turn and by the GC sweep, whenever the worktree is clean
+  and the agent is idle: `origin/<main>` is merged into the session branch, and
+  a `package-lock.json` the merge changed re-runs `npm ci --prefer-offline` in
+  the container (an install that fails is retried on the next sync). A dirty
+  worktree is never touched — the chat is instead told that main moved and its
+  work is uncommitted. A merge that conflicts stays mid-merge in the worktree
+  and the conversation's own agent is asked, in the chat, to resolve the
+  markers and commit; the merge button refuses until that is done.
+  `worktreeSync: false` returns to frozen snapshots.
 - **Merge request button.** With a worktree, the session header gains a
   *merge request* button beside the container chip. It stages everything in the
   worktree and hands the staged diff to one fresh subagent, which answers in a
@@ -315,6 +331,10 @@ between host and container, and ripgrep availability. It is skipped unless
   points; the commit, the push, and the git sections of the description still
   happen. A branch that already reached `origin` also keeps its name — that name
   is public, and renaming it would break whatever refers to it.
+- **The merge button says the worktree is mid-merge** — a main sync hit
+  conflicts and the conversation has not resolved them yet. The chat was told
+  which files conflict; ask it to resolve the markers and commit, then click
+  again (or resolve them yourself in the worktree).
 - **`PowerShell is not available in this sandbox`** — the app's Pwsh tool hands
   PowerShell text to the shell seam, which here is a Linux container; the guard
   (`pwshGuard`, on by default) answers once with a redirect to the Bash tool

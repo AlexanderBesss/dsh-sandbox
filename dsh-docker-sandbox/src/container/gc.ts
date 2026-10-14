@@ -20,13 +20,18 @@ export function startContainerGc(
     const containers = await provisioner.releaseArchived(archived)
     const idle = await provisioner.collectIdle()
     const prunedTrees = worktrees === undefined ? [] : await worktrees.pruneForArchived(archived)
+    const isIdleLive = (sessionId: string): boolean =>
+      !archived.has(sessionId)
+      && ctx.sessions?.get?.(sessionId) !== undefined
+      && ctx.agents?.get?.(sessionId)?.status !== "running"
+    if (worktrees !== undefined) await worktrees.syncLive(archived, isIdleLive)
     return { containers: [...containers, ...idle], worktrees: prunedTrees }
   }
 
   const gc = setInterval(() => {
-    void sweep().then((deleted) => {
-      if (deleted.containers.length > 0) ctx.logger.info(`dsh-docker-sandbox: released containers: ${deleted.containers.join(", ")}`)
-      if (deleted.worktrees.length > 0) ctx.logger.info(`dsh-docker-sandbox: pruned merged worktrees: ${deleted.worktrees.join(", ")}`)
+    void sweep().then((result) => {
+      if (result.containers.length > 0) ctx.logger.info(`dsh-docker-sandbox: released containers: ${result.containers.join(", ")}`)
+      if (result.worktrees.length > 0) ctx.logger.info(`dsh-docker-sandbox: pruned merged worktrees: ${result.worktrees.join(", ")}`)
     }, (error: unknown) => {
       ctx.logger.warn(`dsh-docker-sandbox: container GC pass failed: ${(error as Error).message}`)
     })

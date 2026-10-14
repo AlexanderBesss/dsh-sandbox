@@ -4,6 +4,8 @@ export interface WorktreeView {
   mainWorkspace: string
   dirty: boolean
   unpushed: boolean
+  merging: boolean
+  behind?: number
 }
 
 export interface SandboxStatusView {

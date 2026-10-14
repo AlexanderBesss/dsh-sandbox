@@ -39,6 +39,8 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     worktree: false,
     worktreeRoot: '',
     worktreeBranchPrefix: 'dsh-sbx/',
+    worktreeSync: true,
+    worktreeSyncIntervalMs: 300000,
     npmCacheHost: '',
     worktreeInstall: true,
     warmInstallTimeoutMs: 600000,
@@ -59,6 +61,7 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     idleTtlMs: ref(plain.idleTtlMs),
     worktree: ref(plain.worktree),
     worktreeRoot: ref(plain.worktreeRoot),
+    worktreeSync: ref(plain.worktreeSync),
     worktreeInstall: ref(plain.worktreeInstall),
     prBrief: ref(plain.prBrief),
     resourceLimits: {
