@@ -1,4 +1,4 @@
-import { createElement, useState } from "react"
+import { createElement, useState, type ChangeEvent, type KeyboardEvent } from "react"
 
 interface FormState {
   status: "loading" | "ready" | "unavailable"
@@ -13,7 +13,7 @@ export interface RowConfigForm {
 }
 
 interface FieldSpec {
-  path: string[]
+  path: readonly string[]
   label: string
   kind: "string" | "number" | "boolean"
   hint: string
@@ -34,7 +34,7 @@ const FIELDS: FieldSpec[] = [
   { path: ["idleTtlMs"], label: "Idle container TTL (ms)", kind: "number", hint: "Containers unused this long are deleted by the GC loop." },
 ]
 
-function readPath(value: Record<string, unknown>, path: string[]): unknown {
+function readPath(value: Record<string, unknown>, path: readonly string[]): unknown {
   let cursor: unknown = value
   for (const key of path) {
     if (typeof cursor !== "object" || cursor === null) return undefined
@@ -47,7 +47,7 @@ function FieldRow({ spec, current, writable, onCommit }: {
   spec: FieldSpec
   current: unknown
   writable: boolean
-  onCommit: (path: string[], value: unknown) => Promise<boolean>
+  onCommit: (path: readonly string[], value: unknown) => Promise<boolean>
 }) {
   const [draft, setDraft] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
@@ -74,7 +74,7 @@ function FieldRow({ spec, current, writable, onCommit }: {
           type: "checkbox",
           checked: current === true,
           disabled: !writable || busy,
-          onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+          onChange: (event: ChangeEvent<HTMLInputElement>) => {
             void onCommit(spec.path, event.target.checked)
           },
         }),
@@ -88,9 +88,9 @@ function FieldRow({ spec, current, writable, onCommit }: {
     createElement("input", {
       value: shown,
       disabled: !writable || busy,
-      onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft(event.target.value),
+      onChange: (event: ChangeEvent<HTMLInputElement>) => setDraft(event.target.value),
       onBlur: () => void commit(),
-      onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => { if (event.key === "Enter") void commit() },
+      onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => { if (event.key === "Enter") void commit() },
       style: { padding: "4px 8px" },
     }),
     createElement("span", { style: { fontSize: 12, opacity: 0.6 } }, failed ? "The host rejected this value." : spec.hint),
@@ -107,13 +107,14 @@ export function SandboxConfigForm({ form }: { form: RowConfigForm }) {
       "This build of the plugin exposes no live-editable fields, or the host settings service is not serving this row.")
   }
   const writable = state.writable === true
+  const values = state.value
   return createElement("div", null,
     createElement("p", { style: { fontSize: 13, opacity: 0.7 } },
       "These values apply live to the running plugin; container limits bind when the next container is created."),
     ...FIELDS.map((spec) => createElement(FieldRow, {
       key: spec.path.join("."),
       spec,
-      current: readPath(state.value as Record<string, unknown>, spec.path),
+      current: readPath(values, spec.path),
       writable,
       onCommit: (path, value) => form.mutate([{ op: "set", path, value }]),
     })),

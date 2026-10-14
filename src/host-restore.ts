@@ -1,4 +1,3 @@
-
 import type { Context } from "@deepseek-ai/cordis"
 
 interface LoaderEntry {
@@ -44,19 +43,19 @@ export function apply(ctx: Context & { loader: { entries(): Iterable<LoaderEntry
     if (service === "fileUploads") shimFileUploads(impl)
   })
 
-  const find = (id: string) => [...ctx.loader.entries()].find((entry) => entry.options.id === id)
+  const findEntry = (id: string) => [...ctx.loader.entries()].find((entry) => entry.options.id === id)
   const restoreHostProviders = () => {
     for (const id of WITHDRAWN) {
-      const entry = find(id)
+      const entry = findEntry(id)
       if (entry?.disabled) void entry.update({ disabled: false })
     }
   }
 
-  const sandbox = find("docker-sandbox")
-  if (sandbox !== undefined && !sandbox.disabled) {
+  const sandboxEntry = findEntry("docker-sandbox")
+  if (sandboxEntry !== undefined && !sandboxEntry.disabled) {
     ctx.on("internal/plugin", (fiber: Fiber) => {
       if (fiber.uid || fiber.entry?.options?.id !== "docker-sandbox") return
-      if (find("docker-sandbox")?.disabled) restoreHostProviders()
+      if (findEntry("docker-sandbox")?.disabled) restoreHostProviders()
     })
     return
   }

@@ -22,11 +22,17 @@ function clip(text: string, max: number): string {
   return `${trimmed.slice(0, max).trimEnd()}\n… (truncated)`
 }
 
+function firstNonBlank(...candidates: Array<string | undefined>): string | undefined {
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim()
+    if (trimmed !== undefined && trimmed !== "") return trimmed
+  }
+  return undefined
+}
+
 export function prTitleFor(facts: Pick<PullRequestFacts, "title" | "branch" | "briefTitle">): string {
-  const proposed = facts.briefTitle?.trim()
-  if (proposed !== undefined && proposed !== "") return proposed.slice(0, TITLE_MAX)
-  const title = facts.title?.trim()
-  if (title !== undefined && title !== "") return title.slice(0, TITLE_MAX)
+  const proposed = firstNonBlank(facts.briefTitle, facts.title)
+  if (proposed !== undefined) return proposed.slice(0, TITLE_MAX)
   const leaf = facts.branch.split("/").pop() ?? facts.branch
   if (/^session[-_]/.test(leaf)) return facts.branch
   const words = leaf

@@ -1,6 +1,14 @@
-import { useCallback, useState } from "react"
-import { createMergeRequest, type MergeRequestView, type WorktreeView } from "./api.ts"
-import { DOT, PillButton, copyText, phaseDotColor, useCopied, useSandboxStatus, type PillPhase } from "./pill.tsx"
+import { useCallback } from "react"
+import { createMergeRequest, type WorktreeView } from "./api.ts"
+import {
+  DOT,
+  PillButton,
+  copyText,
+  phaseDotColor,
+  useCopied,
+  usePillAction,
+  useSandboxStatus,
+} from "./pill.tsx"
 
 export interface MergeRequestButtonProps {
   sessionId: string
@@ -9,32 +17,18 @@ export interface MergeRequestButtonProps {
 export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
   const { status } = useSandboxStatus(sessionId)
   const worktree: WorktreeView | undefined = status?.worktree
-  const [phase, setPhase] = useState<PillPhase>("idle")
-  const [result, setResult] = useState<MergeRequestView | undefined>(undefined)
-  const [error, setError] = useState<string | undefined>(undefined)
+  const { phase, result, error, run } = usePillAction(createMergeRequest, sessionId)
   const { copied, markCopied } = useCopied()
 
   const act = useCallback(() => {
-    const link = result?.prUrl ?? result?.compareUrl
-    if (phase === "done") {
-      if (link === undefined) return
-      copyText(link, markCopied)
+    if (phase !== "done") {
+      run()
       return
     }
-    if (phase === "busy") return
-    setPhase("busy")
-    setError(undefined)
-    void createMergeRequest(sessionId).then(
-      (next) => {
-        setResult(next)
-        setPhase("done")
-      },
-      (cause: unknown) => {
-        setError((cause as Error).message)
-        setPhase("error")
-      },
-    )
-  }, [phase, result, sessionId, markCopied])
+    const link = result?.prUrl ?? result?.compareUrl
+    if (link === undefined) return
+    copyText(link, markCopied)
+  }, [markCopied, phase, result, run])
 
   if (worktree === undefined) return null
 
