@@ -41,7 +41,7 @@ async function gitText(git: CliRunner, args: string[], cwd: string, timeoutMs: n
   }
 }
 
-export function buildBriefPrompt(facts: PullRequestFacts, diff: string): string {
+export function buildBriefPrompt(facts: PullRequestFacts, diff: string, budgetMs: number): string {
   const clipped = diff.length > BRIEF_DIFF_CHARS
     ? `${diff.slice(0, BRIEF_DIFF_CHARS).trimEnd()}\n… (truncated — run \`git diff\` for the rest)`
     : diff
@@ -70,11 +70,15 @@ export function buildBriefPrompt(facts: PullRequestFacts, diff: string): string 
     `DIFF (every staged change against the fork point, first ${BRIEF_DIFF_CHARS} characters):`,
     clipped === "" ? "(empty — nothing is staged)" : clipped,
     "",
-    "You have tools in this container: `git diff`, `git log`, `git show`, `rg`, and file",
-    "reads under /workspace all work. Use them for anything the diff above does not",
-    "settle — a caller you are unsure about, a test you want to confirm — before you answer.",
     "Everything the conversation changed is already staged, so the diff above is the whole",
-    "change; new files are in it.",
+    "change; new files are in it. Answer from the diff itself. Reach for a command only",
+    "when the diff cannot settle a specific question, keep it read-only and non-interactive",
+    "(`git --no-pager`), and keep it to a few — commands here run through the container",
+    "and are slow.",
+    "",
+    `TIME: the whole pass has about ${Math.round(budgetMs / 1000)} seconds, and an answer`,
+    "that arrives after the deadline is thrown away. Write the answer before you run out;",
+    "a complete answer from the diff beats an investigation that never finishes.",
     "",
     "Do not modify anything — this is naming and summary only. The worktree is committed",
     "and pushed as soon as you answer, and an edit you make would be left out of it.",
@@ -197,7 +201,7 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
         facts.worktreePath,
         left(),
       )
-      const prompt = buildBriefPrompt({ ...facts, ...(base === undefined ? {} : { base }) }, diff)
+      const prompt = buildBriefPrompt({ ...facts, ...(base === undefined ? {} : { base }) }, diff, budgetMs)
 
       const started = subagents.start(provider, {
         prompt: [{ type: "text", text: prompt }],
@@ -223,7 +227,7 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
       if (result === undefined) {
         return { error: `the naming subagent did not answer within ${budgetMs} ms, so ${fallback}` }
       }
-      if (result.stopReason !== "completed") {
+      if (result.stopReason === "refusal") {
         return { error: `the naming subagent ${stopReasonText(result.stopReason)}, so ${fallback}` }
       }
       const parts: string[] = []
@@ -231,7 +235,12 @@ export function createPrBrief(deps: PrBriefDeps): PrBrief {
         if (block.type === "text" && typeof block.text === "string") parts.push(block.text)
       }
       const brief = parseBrief(parts.join("\n"))
+      // A child cut off by the deadline or its token cap may already have written
+      // the whole shape; keep it rather than throwing the pass away.
       if (brief === undefined) {
+        if (result.stopReason !== "completed") {
+          return { error: `the naming subagent ${stopReasonText(result.stopReason)}, so ${fallback}` }
+        }
         return { error: `the naming subagent answered in a shape that could not be read, so ${fallback}` }
       }
       deps.logger?.info?.(

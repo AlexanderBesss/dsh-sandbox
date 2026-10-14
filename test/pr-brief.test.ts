@@ -143,7 +143,7 @@ describe('parseBrief', () => {
 
 describe('buildBriefPrompt', () => {
   it('puts the change in front of the child', () => {
-    const prompt = buildBriefPrompt(facts(), 'diff --git a/x b/x\n+x')
+    const prompt = buildBriefPrompt(facts(), 'diff --git a/x b/x\n+x', 180000)
     expect(prompt).toContain('dsh-sbx/also-when-we-create-a-branch-1a2b3c')
     expect(prompt).toContain('commit `deadbeefcafe`')
     expect(prompt).toContain('abc1234 name the branch from the content')
@@ -152,7 +152,7 @@ describe('buildBriefPrompt', () => {
   })
 
   it('spells out the shape the parser expects, and the rules that make it useful', () => {
-    const prompt = buildBriefPrompt(facts(), '')
+    const prompt = buildBriefPrompt(facts(), '', 180000)
     expect(prompt).toContain('BRANCH: <3 to 5 words, kebab-case')
     expect(prompt).toContain('TITLE: <one line under 80 characters')
     expect(prompt).toContain('Cover every independent change in the diff')
@@ -161,13 +161,20 @@ describe('buildBriefPrompt', () => {
   })
 
   it('keeps the child out of the worktree it is describing', () => {
-    const prompt = buildBriefPrompt(facts(), '')
+    const prompt = buildBriefPrompt(facts(), '', 180000)
     expect(prompt).toContain('Do not modify anything')
     expect(prompt).toContain('the diff above is the whole')
   })
 
+  it('sends the child to the diff before the shell, and names the deadline', () => {
+    const prompt = buildBriefPrompt(facts(), '', 180000)
+    expect(prompt).toContain('Answer from the diff itself')
+    expect(prompt).toContain('git --no-pager')
+    expect(prompt).toContain('TIME: the whole pass has about 180 seconds')
+  })
+
   it('clips a huge diff and says the rest is one command away', () => {
-    const prompt = buildBriefPrompt(facts(), 'x'.repeat(BRIEF_DIFF_CHARS + 500))
+    const prompt = buildBriefPrompt(facts(), 'x'.repeat(BRIEF_DIFF_CHARS + 500), 180000)
     expect(prompt).toContain('(truncated — run `git diff` for the rest)')
     expect(prompt.length).toBeLessThan(BRIEF_DIFF_CHARS + 4000)
   })
@@ -235,6 +242,20 @@ describe('createPrBrief', () => {
     const { deps } = wiring({ text: GOOD_ANSWER, stopReason: 'refusal' })
     const outcome = await createPrBrief(deps)('session-3', facts())
     expect(outcome).toEqual({ error: expect.stringContaining('declined the task') })
+  })
+
+  it('keeps the shape a cut-off child already wrote', async () => {
+    const { deps } = wiring({ text: GOOD_ANSWER, stopReason: 'aborted' })
+    const outcome = await createPrBrief(deps)('session-3', facts())
+    expect(outcome).toEqual({
+      brief: expect.objectContaining({ branchSlug: 'name-branches-from-content' }),
+    })
+  })
+
+  it('reports a cut-off child that never wrote the shape', async () => {
+    const { deps } = wiring({ text: 'Let me look at one more file.', stopReason: 'aborted' })
+    const outcome = await createPrBrief(deps)('session-3', facts())
+    expect(outcome).toEqual({ error: expect.stringContaining('was stopped before it finished') })
   })
 
   it('reports a child that never answers, and still disposes it', async () => {

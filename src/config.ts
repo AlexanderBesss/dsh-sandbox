@@ -86,7 +86,7 @@ export const Config = Schema.object({
 
   prBrief: Schema.boolean().default(true).volatile(),
 
-  prBriefTimeoutMs: Schema.number().min(1000).default(120000),
+  prBriefTimeoutMs: Schema.number().min(1000).default(180000),
 
   gitArgv: Schema.array(Schema.string()).default(["git"]),
 
