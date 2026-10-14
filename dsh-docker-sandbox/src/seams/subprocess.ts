@@ -9,6 +9,8 @@ import {
 } from "@deepseek-ai/dsh-subprocess"
 import type { SandboxConfig } from "../config.ts"
 import { DeferredStdin } from "../utils/deferred-stdin.ts"
+import { raceAbort } from "../utils/abort-race.ts"
+import { opIdFactory } from "../utils/op-id.ts"
 import { isWindowsPath, type PathMapper } from "../container/paths.ts"
 import { signalProcessGroup } from "../container/process-group.ts"
 import { OutputTail, tailView } from "../utils/output-tail.ts"
@@ -30,12 +32,10 @@ export interface SubprocessDeps {
   worktrees?: WorktreeManager
 }
 
-const OP_NONCE = Math.random().toString(36).slice(2, 8)
-
 export class DockerSubprocessRuntime extends SubprocessRuntime {
   protected declare ctx: SandboxContext
 
-  private nextOp = 0
+  private readonly nextOpId = opIdFactory("op")
 
   constructor(
     ctx: SandboxContext,
@@ -80,7 +80,7 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
       throw new TypeError("subprocess spawn requires a non-empty argv")
     }
     const target = resolveTarget(this.ctx, config, this.deps.worktrees)
-    const op = `op${OP_NONCE}${++this.nextOp}`
+    const op = this.nextOpId()
     const executable = this.mapExecutable(String(spec.argv[0]))
 
     const stdio = spec.stdio ?? {}
@@ -197,29 +197,16 @@ export class DockerSubprocessRuntime extends SubprocessRuntime {
       done: outcome.promise,
       terminate,
       waitForExit: async (signal?: AbortSignal) => {
-        try {
-          if (signal) {
-            await new Promise<void>((resolve, reject) => {
-              const abort = (): void => reject(new Error("aborted"))
-              signal.addEventListener("abort", abort, { once: true })
-              void outcome.promise.then(
-                () => {
-                  signal.removeEventListener("abort", abort)
-                  resolve()
-                },
-                () => {
-                  signal.removeEventListener("abort", abort)
-                  resolve()
-                },
-              )
-            })
-          } else {
-            await outcome.promise.catch(() => undefined)
-          }
+        if (signal === undefined) {
+          await outcome.promise.catch(() => undefined)
           return !escalated
-        } catch {
-          return false
         }
+        const settled = await raceAbort(
+          outcome.promise.then(() => true, () => true),
+          signal,
+          () => false,
+        )
+        return settled && !escalated
       },
     }
   }

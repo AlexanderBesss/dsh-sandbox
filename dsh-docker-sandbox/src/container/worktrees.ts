@@ -172,95 +172,95 @@ export class WorktreeManager {
     }
 
     const title = this.deps.titleFor?.(sessionId)
-    let briefError: string | undefined
-    let nameNote: string | undefined
-    let renamedFrom: string | undefined
-
     await this.deps.git.run(["add", "-A"], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
     const staged = await this.prFacts(sessionId, entry, title)
     const answered = await this.briefFor(sessionId, staged)
-    if (answered.error !== undefined) briefError = answered.error
     const brief = answered.brief
 
     await this.deps.git.run(["add", "-A"], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
-    const status = await this.deps.git.run(["status", "--porcelain"], { cwd: entry.worktreePath, timeoutMs: QUICK_MS })
+    const dirty = await this.isDirty(entry)
     const stat = await this.tryGit(
       staged.base === undefined ? ["diff", "--stat", "HEAD"] : ["diff", "--stat", staged.base],
       entry.worktreePath,
     )
-
-    let committed = false
-    if (status.stdout.trim() !== "") {
-      const subject = this.commitSubject(sessionId, title, brief?.title)
-      const detail = `Session work from container ${containerNameFor(sessionId)}, `
-        + "committed by the dsh-docker-sandbox merge button."
-      await this.deps.git.run(["commit", "-m", subject, "-m", detail], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
-      committed = true
-    }
+    const committed = dirty
+    if (dirty) await this.commitWorktree(entry, this.commitSubject(sessionId, title, brief?.title))
 
     const renamed = this.applyBriefName(sessionId, entry, brief?.branchSlug)
-    if (renamed.from !== undefined) renamedFrom = renamed.from
-    if (renamed.note !== undefined) nameNote = renamed.note
-
     const log = await this.branchLog(entry, staged.base)
-
-    const remoteResult = await this.tryGit(["remote", "get-url", "origin"], entry.repoRoot)
-    const remote = remoteResult?.stdout.trim()
-    let pushed = false
-    if (remote !== undefined && remote !== "") {
-      await this.deps.git.run(["push", "-u", "origin", entry.branch], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
-      pushed = true
-    }
-
-    let prUrl: string | undefined
-    let compareUrl: string | undefined
-    let prError: string | undefined
-    if (pushed && remote !== undefined) {
-      const described: PullRequestFacts = {
-        ...staged,
-        committed,
-        branch: entry.branch,
-        log,
-        ...(stat === undefined ? {} : { stat: stat.stdout.trim() }),
-        ...(brief === undefined
-          ? {}
-          : {
-              summary: brief.bullets,
-              ...(brief.title === undefined ? {} : { briefTitle: brief.title }),
-            }),
-      }
-      const gh = this.deps.gh
-      if (gh === undefined) {
-        prError = "the GitHub CLI is not configured (ghArgv), so the branch was pushed without a pull request"
-        compareUrl = compareUrlFor(remote, entry.branch)
-      } else {
-        try {
-          const opened = await gh.run([
-            "pr", "create",
-            "--head", entry.branch,
-            "--title", prTitleFor(described),
-            "--body", prBodyFor(described),
-          ], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
-          prUrl = /https?:\/\/\S+/.exec(opened.stdout)?.[0]
-        } catch (error) {
-          prError = error instanceof CliCommandError ? error.detail ?? error.message : String(error)
-          compareUrl = compareUrlFor(remote, entry.branch)
-        }
-      }
-    }
+    const remote = await this.pushOrigin(entry)
+    const pr = remote === undefined ? {} : await this.openPullRequest(entry, remote, {
+      ...staged,
+      committed,
+      branch: entry.branch,
+      log,
+      ...(stat === undefined ? {} : { stat: stat.stdout.trim() }),
+      ...(brief === undefined
+        ? {}
+        : {
+            summary: brief.bullets,
+            ...(brief.title === undefined ? {} : { briefTitle: brief.title }),
+          }),
+    })
 
     return {
       branch: entry.branch,
       worktreePath: entry.worktreePath,
       committed,
-      pushed,
-      ...(remote === undefined || remote === "" ? {} : { remote }),
-      ...(prUrl === undefined ? {} : { prUrl }),
-      ...(compareUrl === undefined ? {} : { compareUrl }),
-      ...(prError === undefined ? {} : { prError }),
-      ...(renamedFrom === undefined ? {} : { renamedFrom }),
-      ...(nameNote === undefined ? {} : { nameNote }),
-      ...(briefError === undefined ? {} : { briefError }),
+      pushed: remote !== undefined,
+      ...(remote === undefined ? {} : { remote }),
+      ...pr,
+      ...(renamed.from === undefined ? {} : { renamedFrom: renamed.from }),
+      ...(renamed.note === undefined ? {} : { nameNote: renamed.note }),
+      ...(answered.error === undefined ? {} : { briefError: answered.error }),
+    }
+  }
+
+  private async isDirty(entry: WorktreeEntry): Promise<boolean> {
+    const status = await this.deps.git.run(["status", "--porcelain"], { cwd: entry.worktreePath, timeoutMs: QUICK_MS })
+    return status.stdout.trim() !== ""
+  }
+
+  private async commitWorktree(entry: WorktreeEntry, subject: string): Promise<void> {
+    const detail = `Session work from container ${containerNameFor(entry.sessionId)}, `
+      + "committed by the dsh-docker-sandbox merge button."
+    await this.deps.git.run(["commit", "-m", subject, "-m", detail], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
+  }
+
+  private async pushOrigin(entry: WorktreeEntry): Promise<string | undefined> {
+    const remoteResult = await this.tryGit(["remote", "get-url", "origin"], entry.repoRoot)
+    const remote = remoteResult?.stdout.trim()
+    if (remote === undefined || remote === "") return undefined
+    await this.deps.git.run(["push", "-u", "origin", entry.branch], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
+    return remote
+  }
+
+  private async openPullRequest(
+    entry: WorktreeEntry,
+    remote: string,
+    described: PullRequestFacts,
+  ): Promise<Pick<MergeRequestResult, "prUrl" | "compareUrl" | "prError">> {
+    const gh = this.deps.gh
+    if (gh === undefined) {
+      return {
+        prError: "the GitHub CLI is not configured (ghArgv), so the branch was pushed without a pull request",
+        compareUrl: compareUrlFor(remote, entry.branch),
+      }
+    }
+    try {
+      const opened = await gh.run([
+        "pr", "create",
+        "--head", entry.branch,
+        "--title", prTitleFor(described),
+        "--body", prBodyFor(described),
+      ], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
+      const prUrl = /https?:\/\/\S+/.exec(opened.stdout)?.[0]
+      return prUrl === undefined ? {} : { prUrl }
+    } catch (error) {
+      return {
+        prError: error instanceof CliCommandError ? error.detail ?? error.message : String(error),
+        compareUrl: compareUrlFor(remote, entry.branch),
+      }
     }
   }
 

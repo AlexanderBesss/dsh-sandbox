@@ -1,5 +1,6 @@
 
 import { mkdirSync } from "node:fs"
+import { raceAbort } from "../utils/abort-race.ts"
 import { BootstrapLogger, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
 import type { SandboxConfig } from "../config.ts"
 import { PathMapper, type SandboxMount } from "./paths.ts"
@@ -152,19 +153,8 @@ export class Provisioner {
   ): Promise<SandboxTarget> {
     if (signal === undefined) return run
     if (signal.aborted) return Promise.reject(cancelled(target))
-    return new Promise<SandboxTarget>((resolve, reject) => {
-      const abort = (): void => reject(cancelled(target))
-      signal.addEventListener("abort", abort, { once: true })
-      run.then(
-        (value) => {
-          signal.removeEventListener("abort", abort)
-          resolve(value)
-        },
-        (error: unknown) => {
-          signal.removeEventListener("abort", abort)
-          reject(error)
-        },
-      )
+    return raceAbort(run, signal, () => {
+      throw cancelled(target)
     })
   }
 

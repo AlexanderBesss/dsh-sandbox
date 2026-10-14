@@ -1,66 +1,33 @@
-import { useCallback, useEffect, useState } from "react"
-import { fetchSandboxStatus, type SandboxStatusView } from "./api.ts"
-
-const POLL_MS = 15000
-
-function row(label: string, value: string | undefined): string {
-  return value === undefined || value === "" ? "" : `${label}: ${value}\n`
-}
+import { DOT, PillButton, copyText, useCopied, useSandboxStatus } from "./pill.tsx"
 
 export interface ContainerChipProps {
   sessionId: string
 }
 
+function row(label: string, value: string | undefined): string {
+  return value === undefined || value === "" ? "" : `${label}: ${value}\n`
+}
+
 export function ContainerChip({ sessionId }: ContainerChipProps) {
-  const [status, setStatus] = useState<SandboxStatusView | undefined>(undefined)
-  const [error, setError] = useState<string | undefined>(undefined)
-  const [copied, setCopied] = useState(false)
+  const { status, error } = useSandboxStatus(sessionId)
+  const { copied, markCopied } = useCopied()
 
-  useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const next = await fetchSandboxStatus(sessionId)
-        if (!alive) return
-        setStatus(next)
-        setError(next.error)
-      } catch (cause) {
-        if (!alive) return
-        setError((cause as Error).message)
-      }
-    }
-    void load()
-    const timer = setInterval(() => void load(), POLL_MS)
-    return () => {
-      alive = false
-      clearInterval(timer)
-    }
-  }, [sessionId])
-
-  useEffect(() => {
-    if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(timer)
-  }, [copied])
-
-  const copy = useCallback(() => {
+  const copy = () => {
     if (status === undefined) return
-    void navigator.clipboard?.writeText(status.container).then(() => {
-      setCopied(true)
-    }, () => undefined)
-  }, [status])
+    copyText(status.container, markCopied)
+  }
 
   const state = status === undefined
     ? error === undefined ? "pending" : "error"
     : status.ready ? "ready" : status.phase === "absent" ? "absent" : "pending"
 
   const dotColor = state === "ready"
-    ? "var(--dsw-alias-state-success-primary)"
+    ? DOT.success
     : state === "error"
-      ? "var(--dsw-alias-state-error-primary)"
+      ? DOT.error
       : state === "absent"
-        ? "var(--dsw-alias-state-idle-primary)"
-        : "var(--dsw-alias-state-warn-primary)"
+        ? DOT.idle
+        : DOT.warn
 
   const label = status?.container ?? (error === undefined ? "sandbox…" : "sandbox")
 
@@ -77,39 +44,11 @@ export function ContainerChip({ sessionId }: ContainerChipProps) {
   ].join("")
 
   return (
-    <button
-      type="button"
-      onClick={copy}
+    <PillButton
+      label={copied ? "copied" : label}
       title={title}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        height: 22,
-        padding: "0 8px",
-        border: "1px solid var(--dsw-alias-border-l2)",
-        borderRadius: 11,
-        background: "var(--dsw-alias-bg-layer-1)",
-        color: "var(--dsw-alias-label-secondary)",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 11,
-        lineHeight: 1,
-        cursor: "pointer",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: dotColor,
-          flex: "0 0 auto",
-        }}
-      />
-      <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {copied ? "copied" : label}
-      </span>
-    </button>
+      dotColor={dotColor}
+      onClick={copy}
+    />
   )
 }

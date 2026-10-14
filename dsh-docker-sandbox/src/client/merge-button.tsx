@@ -1,51 +1,24 @@
-
-import { useCallback, useEffect, useState } from "react"
-import { createMergeRequest, fetchSandboxStatus, type MergeRequestView, type WorktreeView } from "./api.ts"
-
-const POLL_MS = 15000
+import { useCallback, useState } from "react"
+import { createMergeRequest, type MergeRequestView, type WorktreeView } from "./api.ts"
+import { DOT, PillButton, copyText, phaseDotColor, useCopied, useSandboxStatus, type PillPhase } from "./pill.tsx"
 
 export interface MergeRequestButtonProps {
   sessionId: string
 }
 
-type Phase = "idle" | "busy" | "done" | "error"
-
 export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
-  const [worktree, setWorktree] = useState<WorktreeView | undefined>(undefined)
-  const [phase, setPhase] = useState<Phase>("idle")
+  const { status } = useSandboxStatus(sessionId)
+  const worktree: WorktreeView | undefined = status?.worktree
+  const [phase, setPhase] = useState<PillPhase>("idle")
   const [result, setResult] = useState<MergeRequestView | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const next = await fetchSandboxStatus(sessionId)
-        if (!alive) return
-        setWorktree(next.worktree)
-      } catch {
-      }
-    }
-    void load()
-    const timer = setInterval(() => void load(), POLL_MS)
-    return () => {
-      alive = false
-      clearInterval(timer)
-    }
-  }, [sessionId])
-
-  useEffect(() => {
-    if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(timer)
-  }, [copied])
+  const { copied, markCopied } = useCopied()
 
   const act = useCallback(() => {
     const link = result?.prUrl ?? result?.compareUrl
     if (phase === "done") {
       if (link === undefined) return
-      void navigator.clipboard?.writeText(link).then(() => setCopied(true), () => undefined)
+      copyText(link, markCopied)
       return
     }
     if (phase === "busy") return
@@ -61,7 +34,7 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
         setPhase("error")
       },
     )
-  }, [phase, result, sessionId])
+  }, [phase, result, sessionId, markCopied])
 
   if (worktree === undefined) return null
 
@@ -81,13 +54,9 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
   const opened = result?.prUrl !== undefined
   const dotColor = phase === "done"
     ? opened || result?.prError === undefined
-      ? "var(--dsw-alias-state-success-primary)"
-      : "var(--dsw-alias-state-warn-primary)"
-    : phase === "error"
-      ? "var(--dsw-alias-state-error-primary)"
-      : phase === "busy"
-        ? "var(--dsw-alias-state-warn-primary)"
-        : "var(--dsw-alias-state-idle-primary)"
+      ? DOT.success
+      : DOT.warn
+    : phaseDotColor(phase)
 
   const title = [
     `branch ${worktree.branch}\n`,
@@ -107,40 +76,12 @@ export function MergeRequestButton({ sessionId }: MergeRequestButtonProps) {
   ].join("")
 
   return (
-    <button
-      type="button"
-      onClick={act}
+    <PillButton
+      label={phase === "done" && copied ? "copied" : label}
       title={title}
+      dotColor={dotColor}
+      onClick={act}
       disabled={phase === "busy"}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        height: 22,
-        padding: "0 8px",
-        border: "1px solid var(--dsw-alias-border-l2)",
-        borderRadius: 11,
-        background: "var(--dsw-alias-bg-layer-1)",
-        color: "var(--dsw-alias-label-secondary)",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 11,
-        lineHeight: 1,
-        cursor: phase === "busy" ? "wait" : "pointer",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: dotColor,
-          flex: "0 0 auto",
-        }}
-      />
-      <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {phase === "done" && copied ? "copied" : label}
-      </span>
-    </button>
+    />
   )
 }

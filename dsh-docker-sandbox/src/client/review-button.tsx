@@ -1,37 +1,17 @@
-import { useCallback, useEffect, useState } from "react"
-import { fetchSandboxStatus, requestReview, type ReviewView, type WorktreeView } from "./api.ts"
-
-const POLL_MS = 15000
+import { useCallback, useState } from "react"
+import { requestReview, type ReviewView, type WorktreeView } from "./api.ts"
+import { PillButton, phaseDotColor, useSandboxStatus, type PillPhase } from "./pill.tsx"
 
 export interface ReviewButtonProps {
   sessionId: string
 }
 
-type Phase = "idle" | "busy" | "done" | "error"
-
 export function ReviewButton({ sessionId }: ReviewButtonProps) {
-  const [worktree, setWorktree] = useState<WorktreeView | undefined>(undefined)
-  const [phase, setPhase] = useState<Phase>("idle")
+  const { status } = useSandboxStatus(sessionId)
+  const worktree: WorktreeView | undefined = status?.worktree
+  const [phase, setPhase] = useState<PillPhase>("idle")
   const [result, setResult] = useState<ReviewView | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
-
-  useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const next = await fetchSandboxStatus(sessionId)
-        if (!alive) return
-        setWorktree(next.worktree)
-      } catch {
-      }
-    }
-    void load()
-    const timer = setInterval(() => void load(), POLL_MS)
-    return () => {
-      alive = false
-      clearInterval(timer)
-    }
-  }, [sessionId])
 
   const act = useCallback(() => {
     if (phase === "busy") return
@@ -59,14 +39,6 @@ export function ReviewButton({ sessionId }: ReviewButtonProps) {
         ? "retry review"
         : "review"
 
-  const dotColor = phase === "done"
-    ? "var(--dsw-alias-state-success-primary)"
-    : phase === "error"
-      ? "var(--dsw-alias-state-error-primary)"
-      : phase === "busy"
-        ? "var(--dsw-alias-state-warn-primary)"
-        : "var(--dsw-alias-state-idle-primary)"
-
   const title = [
     `branch ${worktree.branch}\n`,
     worktree.dirty ? "uncommitted changes will be reviewed\n" : "",
@@ -79,40 +51,12 @@ export function ReviewButton({ sessionId }: ReviewButtonProps) {
   ].join("")
 
   return (
-    <button
-      type="button"
-      onClick={act}
+    <PillButton
+      label={label}
       title={title}
+      dotColor={phaseDotColor(phase)}
+      onClick={act}
       disabled={phase === "busy"}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        height: 22,
-        padding: "0 8px",
-        border: "1px solid var(--dsw-alias-border-l2)",
-        borderRadius: 11,
-        background: "var(--dsw-alias-bg-layer-1)",
-        color: "var(--dsw-alias-label-secondary)",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 11,
-        lineHeight: 1,
-        cursor: phase === "busy" ? "wait" : "pointer",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: dotColor,
-          flex: "0 0 auto",
-        }}
-      />
-      <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {label}
-      </span>
-    </button>
+    />
   )
 }
