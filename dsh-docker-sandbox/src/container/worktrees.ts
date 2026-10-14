@@ -2,10 +2,11 @@
  * Per-conversation git worktrees.
  *
  * With `worktree` enabled, each conversation works in its own `git worktree`
- * carved from the session's checkout, on its own branch. Two chats on one
- * repository then cannot step on each other: the container mounts the
- * worktree, the host file tools read and write the worktree, and the diff a
- * merge request carries is exactly that conversation's branch.
+ * carved from the session's checkout, on its own branch, named after the
+ * conversation rather than its id. Two chats on one repository then cannot step
+ * on each other: the container mounts the worktree, the host file tools read and
+ * write the worktree, and the diff a merge request carries is exactly that
+ * conversation's branch.
  *
  * The manager runs `git` on the host (the workspace is host files), keeps a
  * small JSON registry under the worktrees root so the session → worktree
@@ -30,8 +31,10 @@ import type { SandboxConfig } from "../config.ts"
 import type { BootstrapLogger } from "./bootstrap.ts"
 import { CliCommandError, type CliResult, type CliRunner } from "./git.ts"
 import { PathMapper } from "./paths.ts"
-import { collectChanges, type SessionChanges } from "./review.ts"
-import { containerNameFor, sessionSlugFor, slugDigest } from "./session.ts"
+import type { PrBrief, PullRequestBrief } from "./pr-brief.ts"
+import { prBodyFor, prTitleFor, type PullRequestFacts } from "./pr-description.ts"
+import { collectChanges, forkPointFor, type SessionChanges } from "./review.ts"
+import { branchSlugFor, containerNameFor, sessionSlugFor, slugDigest } from "./session.ts"
 
 /** One session's worktree, as the registry records it. */
 export interface WorktreeEntry {
@@ -44,6 +47,11 @@ export interface WorktreeEntry {
   worktreePath: string
   /** The branch the worktree checks out. */
   branch: string
+  /**
+   * The name this branch carried before the merge-request naming pass renamed
+   * it. Recorded so the old name stays findable after the rename.
+   */
+  renamedFrom?: string
   /** Epoch millis of creation. */
   createdAt: number
   /**
@@ -87,6 +95,23 @@ export interface MergeRequestResult {
   prUrl?: string
   /** Set when no PR could be opened and the remote can offer a compare page. */
   compareUrl?: string
+  /**
+   * Why no pull request was opened, when that happened: the GitHub CLI is
+   * not configured, or it refused (missing, unauthenticated, a closed
+   * compare base). The push still stands, so this reads as "branch is up
+   * there, but here is what blocked the PR" — never a silent fallback.
+   */
+  prError?: string
+  /** Set when the naming pass renamed the branch before pushing. */
+  renamedFrom?: string
+  /** Why the branch kept its name, when the naming pass proposed another. */
+  nameNote?: string
+  /**
+   * Why there was no naming pass at all: no subagent service, a refused or
+   * timed-out child, an answer that could not be read. The request still opens
+   * with the branch name it had and the git sections of the description.
+   */
+  briefError?: string
 }
 
 export interface WorktreeDeps {
@@ -97,6 +122,19 @@ export interface WorktreeDeps {
   logger?: BootstrapLogger
   /** Receives the extra `.git` mount each worktree session needs. */
   paths: PathMapper
+  /**
+   * The conversation's readable name (its chat title, or the first prompt when
+   * the app has not titled it yet). Names the branch at creation and titles the
+   * pull request; absent or unusable falls back to the session slug.
+   */
+  titleFor?: (sessionId: string) => string | undefined
+  /**
+   * The one AI pass a merge request runs: it names the branch, titles the
+   * request, and writes the description bullets. Absent (or when `prBrief` is
+   * off) leaves the branch on the name it was created with and the description at
+   * its git sections.
+   */
+  brief?: PrBrief
 }
 
 /** Registry file name, kept inside the worktrees root. */
@@ -253,10 +291,15 @@ export class WorktreeManager {
   /**
    * Turn one session's worktree into a merge request.
    *
-   * Commits everything in the worktree, pushes the branch to `origin`, and
-   * opens a GitHub pull request through `gh` when it is installed; without
-   * `gh` (or when `gh` refuses) the result carries the remote's compare URL
-   * so the human can raise the request in one click.
+   * Stages everything in the worktree, asks the naming pass what the change is
+   * (branch name, title, description bullets — see `container/pr-brief`),
+   * commits and renames with its answer, pushes to `origin`, and opens a GitHub
+   * pull request through `gh`. The pass runs before anything is public, which is
+   * what makes the rename safe; a branch that already reached a remote keeps its
+   * name and says so.
+   *
+   * Without `gh` (or when `gh` refuses) the result carries the remote's compare
+   * URL and the reason, so the human can raise the request in one click.
    */
   async mergeRequest(sessionId: string, workspace: string): Promise<MergeRequestResult> {
     const entry = this.ensure(sessionId, workspace)
@@ -270,14 +313,46 @@ export class WorktreeManager {
       )
     }
 
+    const title = this.deps.titleFor?.(sessionId)
+    let briefError: string | undefined
+    let nameNote: string | undefined
+    let renamedFrom: string | undefined
+
+    // Stage first: the diff the naming pass reads has to be the diff that ships.
+    await this.deps.git.run(["add", "-A"], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
+    const staged = await this.prFacts(sessionId, entry, title)
+    const answered = await this.briefFor(sessionId, staged)
+    if (answered.error !== undefined) briefError = answered.error
+    const brief = answered.brief
+
+    // The pass can take the whole `prBriefTimeoutMs`, and the child works inside
+    // this same worktree, so re-stage before committing: anything written during
+    // the pass still belongs to the commit. The diffstat is re-read for the same
+    // reason — the description has to match what actually ships.
     await this.deps.git.run(["add", "-A"], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
     const status = await this.deps.git.run(["status", "--porcelain"], { cwd: entry.worktreePath, timeoutMs: QUICK_MS })
+    const stat = await this.tryGit(
+      staged.base === undefined ? ["diff", "--stat", "HEAD"] : ["diff", "--stat", staged.base],
+      entry.worktreePath,
+    )
+
     let committed = false
     if (status.stdout.trim() !== "") {
-      const message = `dsh-sbx: session ${sessionId} (${new Date().toISOString().slice(0, 10)})`
-      await this.deps.git.run(["commit", "-m", message], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
+      const subject = this.commitSubject(sessionId, title, brief?.title)
+      const detail = `Session work from container ${containerNameFor(sessionId)}, `
+        + "committed by the dsh-docker-sandbox merge button."
+      await this.deps.git.run(["commit", "-m", subject, "-m", detail], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
       committed = true
     }
+
+    const renamed = this.applyBriefName(sessionId, entry, brief?.branchSlug)
+    if (renamed.from !== undefined) renamedFrom = renamed.from
+    if (renamed.note !== undefined) nameNote = renamed.note
+
+    // The description has to list the commit the button just wrote, and the
+    // probe has to run before the push: with no known fork point the log is
+    // `HEAD --not --remotes`, which a pushed branch would hide from itself.
+    const log = await this.branchLog(entry, staged.base)
 
     const remoteResult = await this.tryGit(["remote", "get-url", "origin"], entry.repoRoot)
     const remote = remoteResult?.stdout.trim()
@@ -289,22 +364,40 @@ export class WorktreeManager {
 
     let prUrl: string | undefined
     let compareUrl: string | undefined
+    let prError: string | undefined
     if (pushed && remote !== undefined) {
+      const described: PullRequestFacts = {
+        ...staged,
+        committed,
+        branch: entry.branch,
+        log,
+        ...(stat === undefined ? {} : { stat: stat.stdout.trim() }),
+        ...(brief === undefined
+          ? {}
+          : {
+              summary: brief.bullets,
+              ...(brief.title === undefined ? {} : { briefTitle: brief.title }),
+            }),
+      }
       const gh = this.deps.gh
-      if (gh !== undefined) {
+      if (gh === undefined) {
+        prError = "the GitHub CLI is not configured (ghArgv), so the branch was pushed without a pull request"
+        compareUrl = compareUrlFor(remote, entry.branch)
+      } else {
         try {
           const opened = await gh.run([
             "pr", "create",
             "--head", entry.branch,
-            "--title", `dsh-sbx: ${sessionId}`,
-            "--body", `Session work from container ${containerNameFor(sessionId)}, created by dsh-docker-sandbox.`,
+            "--title", prTitleFor(described),
+            "--body", prBodyFor(described),
           ], { cwd: entry.worktreePath, timeoutMs: PUSH_MS })
           prUrl = /https?:\/\/\S+/.exec(opened.stdout)?.[0]
-        } catch {
+        } catch (error) {
+          // The branch is pushed either way; say what the CLI answered rather
+          // than quietly handing back only a compare link.
+          prError = error instanceof CliCommandError ? error.detail ?? error.message : String(error)
           compareUrl = compareUrlFor(remote, entry.branch)
         }
-      } else {
-        compareUrl = compareUrlFor(remote, entry.branch)
       }
     }
 
@@ -316,6 +409,142 @@ export class WorktreeManager {
       ...(remote === undefined || remote === "" ? {} : { remote }),
       ...(prUrl === undefined ? {} : { prUrl }),
       ...(compareUrl === undefined ? {} : { compareUrl }),
+      ...(prError === undefined ? {} : { prError }),
+      ...(renamedFrom === undefined ? {} : { renamedFrom }),
+      ...(nameNote === undefined ? {} : { nameNote }),
+      ...(briefError === undefined ? {} : { briefError }),
+    }
+  }
+
+  /**
+   * The commit subject for work nobody wrote a message for: what the naming pass
+   * called the change, else what the app calls the chat, else the session slug.
+   */
+  private commitSubject(sessionId: string, title: string | undefined, briefTitle: string | undefined): string {
+    const named = [briefTitle, title]
+      .map((text) => (text ?? "").trim())
+      .find((text) => text !== "") ?? sessionSlugFor(sessionId)
+    return `dsh-sbx: ${named}`.slice(0, 72)
+  }
+
+  /**
+   * The naming pass's answer, or the reason to show the user. Never throws: the
+   * work is already staged by the time this runs, so a child that cannot answer
+   * costs the naming and the summary, never the request.
+   */
+  private async briefFor(
+    sessionId: string,
+    facts: PullRequestFacts,
+  ): Promise<{ brief?: PullRequestBrief; error?: string }> {
+    const brief = this.deps.brief
+    if (brief === undefined || !this.deps.config.prBrief.get()) return {}
+    try {
+      const outcome = await brief(sessionId, facts)
+      return "brief" in outcome ? { brief: outcome.brief } : { error: outcome.error }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return { error: `the naming subagent failed: ${detail}` }
+    }
+  }
+
+  /**
+   * Rename the session's branch to what the naming pass proposed.
+   *
+   * This happens before the push, which is what makes it safe: a name that has
+   * reached a remote is already public — a checkout, a comment, or an open
+   * request can be referring to it — so the branch keeps its name and the reason
+   * is reported instead. The worktree directory keeps its own name either way;
+   * the container mounts it, and moving a mounted tree is not worth the churn.
+   *
+   * @returns `from` when the rename happened, `note` when it did not.
+   */
+  private applyBriefName(
+    sessionId: string,
+    entry: WorktreeEntry,
+    slug: string | undefined,
+  ): { from?: string; note?: string } {
+    if (slug === undefined) return {}
+    const wanted = `${this.deps.config.worktreeBranchPrefix}${slug}-${slugDigest(sessionId).slice(0, 6)}`
+    if (wanted === entry.branch) return {}
+    if (this.isPushed(entry)) {
+      return { note: `the branch had already been pushed as "${entry.branch}", so it keeps that name` }
+    }
+    try {
+      this.deps.git.runSync(["branch", "-m", entry.branch, wanted], { cwd: entry.worktreePath, timeoutMs: QUICK_MS })
+    } catch (error) {
+      const detail = error instanceof CliCommandError ? error.detail ?? error.message : String(error)
+      return { note: `could not rename the branch to "${wanted}": ${detail}` }
+    }
+    const from = entry.branch
+    entry.branch = wanted
+    entry.renamedFrom = from
+    this.saveRegistry(entry.repoRoot)
+    this.deps.logger?.info?.(
+      `dsh-docker-sandbox: session ${sessionId} branch renamed "${from}" → "${wanted}" (named after the change)`,
+    )
+    return { from }
+  }
+
+  /** True when `origin` already carries this branch, making its name public. */
+  private isPushed(entry: WorktreeEntry): boolean {
+    try {
+      // `for-each-ref` has no `--quiet`; an unsupported option exits 129 and
+      // would read as "already public" forever.
+      //
+      // The local remote-tracking ref is the only evidence consulted: a branch
+      // pushed from some other clone leaves no trace here, so its name would
+      // still be renamed. Every push this plugin makes goes through the shared
+      // `.git`, which updates that ref, so the gap is hand-pushed branches only.
+      const refs = this.deps.git.runSync(
+        ["for-each-ref", "--count=1", `refs/remotes/origin/${entry.branch}`],
+        { cwd: entry.repoRoot, timeoutMs: QUICK_MS },
+      )
+      return refs.stdout.trim() !== ""
+    } catch {
+      return true // cannot tell: treat the name as public and leave it alone
+    }
+  }
+
+  /** `git log --oneline` of what the branch carries beyond its fork point. */
+  private async branchLog(entry: WorktreeEntry, base: string | undefined): Promise<string> {
+    const log = await this.tryGit(
+      base === undefined ? ["log", "--oneline", "HEAD", "--not", "--remotes"] : ["log", "--oneline", `${base}..HEAD`],
+      entry.worktreePath,
+    )
+    return log?.stdout.trim() ?? ""
+  }
+
+  /**
+   * The git facts behind the pull-request text: the branch's own commits and
+   * its diffstat against the fork point. All probes — a branch with no computable
+   * base, or a repository git cannot read, still gets a description of what the
+   * plugin can see rather than a failed request.
+   */
+  private async prFacts(
+    sessionId: string,
+    entry: WorktreeEntry,
+    title: string | undefined,
+  ): Promise<PullRequestFacts> {
+    const base = await forkPointFor(this.deps.git, entry)
+    const log = await this.branchLog(entry, base ?? undefined)
+    const stat = await this.tryGit(
+      base === undefined ? ["diff", "--stat", "HEAD"] : ["diff", "--stat", base],
+      entry.worktreePath,
+    )
+    const named = (title ?? "").trim()
+    return {
+      sessionId,
+      branch: entry.branch,
+      worktreePath: entry.worktreePath,
+      mainWorkspace: entry.mainWorkspace,
+      container: containerNameFor(sessionId),
+      ...(base === undefined ? {} : { base: base.slice(0, 12) }),
+      log,
+      stat: stat?.stdout.trim() ?? "",
+      // The pass reads these facts before the commit exists; the caller sets
+      // this once it has actually happened.
+      committed: false,
+      ...(named === "" ? {} : { title: named }),
     }
   }
 
@@ -381,7 +610,7 @@ export class WorktreeManager {
 
   /** Create the worktree and record it. */
   private create(sessionId: string, workspace: string, repoRoot: string): WorktreeEntry {
-    const slug = sessionSlugFor(sessionId)
+    const slug = branchSlugFor(this.deps.titleFor?.(sessionId), sessionId)
     const worktreePath = join(this.treesRootFor(repoRoot), slug)
     const entry: WorktreeEntry = {
       sessionId,

@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { CONTAINER_PREFIX, OWNERSHIP_LABEL, SandboxSessionError, containerNameFor, resolveTarget, targetForSession } from '../src/container/session.ts'
+import {
+  CONTAINER_PREFIX,
+  OWNERSHIP_LABEL,
+  SandboxSessionError,
+  branchSlugFor,
+  containerNameFor,
+  resolveTarget,
+  slugDigest,
+  targetForSession,
+  titleSlugFor,
+} from '../src/container/session.ts'
 import type { WorktreeEntry, WorktreeManager } from '../src/container/worktrees.ts'
 import type { SandboxContext } from '../src/context.ts'
 import { testConfig } from './helpers.ts'
@@ -164,5 +174,53 @@ describe('targetForSession', () => {
 describe('OWNERSHIP_LABEL', () => {
   it('selects exactly this plugin’s containers', () => {
     expect(OWNERSHIP_LABEL).toBe('dsh.sandbox=1')
+  })
+})
+
+describe('titleSlugFor', () => {
+  it('keeps only characters a git ref may carry', () => {
+    expect(titleSlugFor('Fix the login crash!!!')).toBe('fix-the-login-crash')
+    expect(titleSlugFor('  what, where & why?  ')).toBe('what-where-why')
+  })
+
+  it('folds accents, and treats an undecomposable one as a separator', () => {
+    expect(titleSlugFor('Café au lait')).toBe('cafe-au-lait')
+    // `ø` has no NFKD decomposition, so it separates rather than becoming `o`.
+    expect(titleSlugFor('Ünicødé')).toBe('unic-de')
+  })
+
+  it('yields nothing when there is nothing latin-alphanumeric to name a branch with', () => {
+    for (const text of ['', '   ', '🎉 🚀', '日本語のタイトル', '---']) {
+      expect(titleSlugFor(text)).toBe('')
+    }
+  })
+
+  it('cuts a long title without leaving a dangling separator', () => {
+    expect(titleSlugFor('a'.repeat(60))).toBe('a'.repeat(40))
+    expect(titleSlugFor('fix the crash --')).toBe('fix-the-crash')
+  })
+})
+
+describe('branchSlugFor', () => {
+  it('names the branch after the conversation', () => {
+    expect(branchSlugFor('Fix the login crash', 'session-3')).toBe(`fix-the-login-crash-${slugDigest('session-3').slice(0, 6)}`)
+  })
+
+  it('separates two conversations that carry the same title', () => {
+    // Two chats named alike would otherwise share one branch, and one chat
+    // would commit onto the other's work.
+    expect(branchSlugFor('Fix the crash', 'session-3')).not.toBe(branchSlugFor('Fix the crash', 'session-4'))
+  })
+
+  it('falls back to the session slug when the title is unusable', () => {
+    for (const title of [undefined, '', '   ', '🎉 🚀', '日本語のタイトル']) {
+      expect(branchSlugFor(title, 'session-3')).toBe('session-3')
+    }
+  })
+
+  it('stays short enough to read in a branch list', () => {
+    const slug = branchSlugFor('word '.repeat(40), 'session-3')
+    expect(slug.length).toBeLessThanOrEqual(47)
+    expect(slug).toMatch(/^[a-z0-9-]+$/)
   })
 })

@@ -58,6 +58,12 @@ export interface SessionService {
   get(id: string): {
     id: string
     header?: { cwd?: string; parentSession?: string }
+    /**
+     * The durable event log, oldest first (`dsh-session`). Read only to name a
+     * branch after the message that started the conversation, when the app has
+     * not titled it yet.
+     */
+    snapshotEvents?(): unknown[]
   } | undefined
 }
 
