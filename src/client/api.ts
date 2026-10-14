@@ -9,6 +9,15 @@ export interface WorktreeView {
   behind?: number
 }
 
+export type SubagentKind = "review" | "resolve"
+
+export interface SubagentView {
+  kind: SubagentKind
+  childSessionId: string
+  startedAt: number
+  cancelling: boolean
+}
+
 export interface SandboxStatusView {
   container: string
   image: string
@@ -21,6 +30,7 @@ export interface SandboxStatusView {
   error?: string
   worktree?: WorktreeView
   worktreeError?: string
+  subagents?: SubagentView[]
 }
 
 export interface MergeRequestView {
@@ -61,46 +71,35 @@ export async function fetchSandboxStatus(sessionId: string): Promise<SandboxStat
   return body.data
 }
 
-export async function createMergeRequest(sessionId: string): Promise<MergeRequestView> {
-  const response = await fetch(`/sandbox/api/merge-request?session=${encodeURIComponent(sessionId)}`, {
+async function postAction<T>(path: string, label: string): Promise<T> {
+  const response = await fetch(path, {
     method: "POST",
     headers: { accept: "application/json" },
   })
-  const body = (await response.json()) as
-    | { ok: true; data: MergeRequestView }
-    | { ok: false; error?: { code?: string; message?: string } }
+  const body = (await response.json()) as { ok: true; data: T } | { ok: false; error?: { code?: string; message?: string } }
   if (body.ok !== true) {
-    throw new Error(body.error?.message ?? `merge request failed with HTTP ${response.status}`)
+    throw new Error(body.error?.message ?? `${label} failed with HTTP ${response.status}`)
   }
   return body.data
 }
 
-export async function requestReview(sessionId: string): Promise<ReviewView> {
-  const response = await fetch(`/sandbox/api/review?session=${encodeURIComponent(sessionId)}`, {
-    method: "POST",
-    headers: { accept: "application/json" },
-  })
-  const body = (await response.json()) as
-    | { ok: true; data: ReviewView }
-    | { ok: false; error?: { code?: string; message?: string } }
-  if (body.ok !== true) {
-    throw new Error(body.error?.message ?? `review request failed with HTTP ${response.status}`)
-  }
-  return body.data
+export function createMergeRequest(sessionId: string): Promise<MergeRequestView> {
+  return postAction(`/sandbox/api/merge-request?session=${encodeURIComponent(sessionId)}`, "merge request")
 }
 
-export async function resolveConflicts(sessionId: string): Promise<ResolveView> {
-  const response = await fetch(`/sandbox/api/resolve-conflicts?session=${encodeURIComponent(sessionId)}`, {
-    method: "POST",
-    headers: { accept: "application/json" },
-  })
-  const body = (await response.json()) as
-    | { ok: true; data: ResolveView }
-    | { ok: false; error?: { code?: string; message?: string } }
-  if (body.ok !== true) {
-    throw new Error(body.error?.message ?? `conflict resolution failed with HTTP ${response.status}`)
-  }
-  return body.data
+export function requestReview(sessionId: string): Promise<ReviewView> {
+  return postAction(`/sandbox/api/review?session=${encodeURIComponent(sessionId)}`, "review request")
+}
+
+export function resolveConflicts(sessionId: string): Promise<ResolveView> {
+  return postAction(`/sandbox/api/resolve-conflicts?session=${encodeURIComponent(sessionId)}`, "conflict resolution")
+}
+
+export function cancelSubagent(sessionId: string, kind: SubagentKind): Promise<{ cancelled: number }> {
+  return postAction(
+    `/sandbox/api/cancel-subagent?session=${encodeURIComponent(sessionId)}&kind=${kind}`,
+    `cancelling the ${kind}`,
+  )
 }
 
 export async function listSandboxContainers(): Promise<{ name: string; phase: string; createdAt?: string }[]> {

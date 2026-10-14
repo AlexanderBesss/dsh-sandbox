@@ -12,7 +12,7 @@ import { createPrBrief } from "./container/pr-brief.ts"
 import { createSessionTitleReader } from "./container/session-title.ts"
 import { type MountMode, PathMapper } from "./container/paths.ts"
 import { Provisioner } from "./container/provisioner.ts"
-import { createResolverGuard, registerStatusRoute } from "./status.ts"
+import { createResolverGuard, createSubagentRunRegistry, registerStatusRoute } from "./status.ts"
 import { DockerShellExecutor } from "./seams/shell.ts"
 import { DockerSubprocessRuntime } from "./seams/subprocess.ts"
 import { createShellBackend } from "./seams/terminal.ts"
@@ -95,6 +95,7 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     subagents = (inner as SandboxContext).subagents
   })
 
+  const runs = createSubagentRunRegistry()
   registerStatusRoute(ctx, {
     provisioner,
     paths,
@@ -102,11 +103,21 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     worktrees,
     subagents: () => subagents,
     resolvers: createResolverGuard(),
+    runs,
   })
 
-  ctx.on("workspace/session-stop", ({ sessionId }: { sessionId: string }) =>
-    provisioner.releaseSession(sessionId),
-  )
+  const stopChildren = (sessionId: string): void => {
+    // Cancel before the container is released: an aborted child still has a turn
+    // in flight, and a tool call from it would provision a fresh container.
+    for (const handle of runs.cancelAll(sessionId)) {
+      ctx.logger.info(`dsh-docker-sandbox: stopped the ${handle.kind} child ${handle.childSessionId} of session ${sessionId}`)
+    }
+  }
+
+  ctx.on("workspace/session-stop", ({ sessionId }: { sessionId: string }) => {
+    stopChildren(sessionId)
+    provisioner.releaseSession(sessionId)
+  })
 
   const engineGate = createEngineGate(provisioner, config, {
     worktrees,
@@ -115,6 +126,7 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
   ctx.on("agent/pre-step", engineGate)
 
   ctx.on("session/disposed", (session: { id: string }) => {
+    stopChildren(session.id)
     provisioner.releaseSession(session.id)
     engineGate.forget(session.id)
   })
