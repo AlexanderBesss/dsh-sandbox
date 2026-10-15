@@ -93,4 +93,4 @@ export const Config = Schema.object({
   ghArgv: Schema.array(Schema.string()).default(["gh"]),
 })
 
-export type SandboxConfig = typeof Config extends Schema<any, infer T, any> ? T : never
+export type SandboxConfig = ReturnType<typeof Config>

@@ -28,11 +28,15 @@ export function slugDigest(sessionId: string): string {
   return createHash("sha256").update(sessionId).digest("hex").slice(0, 8)
 }
 
-export function sessionSlugFor(sessionId: string): string {
-  const slug = sessionId
+function dashSlug(text: string): string {
+  return text
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
+}
+
+export function sessionSlugFor(sessionId: string): string {
+  const slug = dashSlug(sessionId)
   if (slug === sessionId && slug.length <= SLUG_MAX) return slug || "unnamed"
   const head = slug.slice(0, SLUG_MAX - 10)
   return `${head}-${slugDigest(sessionId)}`
@@ -69,11 +73,7 @@ export const COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 
 export function composeProjectFor(workspace: string): string {
   const base = workspace.split(/[\\/]+/).filter(Boolean).pop() ?? "workspace"
-  const slug = base
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32) || "workspace"
+  const slug = dashSlug(base).slice(0, 32) || "workspace"
   return `dsh-${slug}-${slugDigest(workspace.toLowerCase())}`
 }
 
@@ -92,22 +92,13 @@ export function targetForSession(
 
   const parentSession = typeof header?.parentSession === "string" ? header.parentSession : undefined
   const entry = worktrees?.ensure(sessionId, workspace, parentSession)
-  if (entry !== undefined) {
-    return {
-      sessionId,
-      container: containerNameFor(sessionId),
-      workspace: entry.worktreePath,
-      shared: sessionId === DEFAULT_SESSION_ID,
-      mainWorkspace: workspace,
-    }
-  }
-
-  return {
+  const identity = {
     sessionId,
     container: containerNameFor(sessionId),
-    workspace,
     shared: sessionId === DEFAULT_SESSION_ID,
   }
+  if (entry === undefined) return { ...identity, workspace }
+  return { ...identity, workspace: entry.worktreePath, mainWorkspace: workspace }
 }
 
 export function resolveTarget(

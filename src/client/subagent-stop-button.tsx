@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 import { cancelSubagent } from "./api.ts"
-import { DOT, PillButton, useSandboxStatus } from "./pill.tsx"
+import { DOT, PillButton, errorMessage, useSandboxStatus } from "./pill.tsx"
 
 const STOP_LABEL = { review: "stop review", resolve: "stop resolver" } as const
 
@@ -25,7 +25,7 @@ export function SubagentStopButton({ sessionId }: SubagentStopButtonProps) {
       () => undefined,
       (cause: unknown) => {
         setStopping(false)
-        setError((cause as Error).message)
+        setError(errorMessage(cause))
       },
     )
   }, [child, stopping])

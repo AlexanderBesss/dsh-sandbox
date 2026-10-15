@@ -28,22 +28,22 @@ function firstPromptText(events: unknown[]): string | undefined {
   return undefined
 }
 
+function serviceTitle(ctx: SandboxContext, session: unknown): string | undefined {
+  try {
+    const titles = ctx.get("sessionTitle") as TitleServiceSlice | undefined
+    const value = titles?.get?.(session)?.title
+    return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function createSessionTitleReader(ctx: SandboxContext): SessionTitleReader {
   return (sessionId: string): string | undefined => {
     try {
       const session = ctx.sessions?.get?.(sessionId)
       if (session === undefined) return undefined
-      let folded: string | undefined
-      try {
-        const titles = ctx.get("sessionTitle") as TitleServiceSlice | undefined
-        const value = titles?.get?.(session)?.title
-        if (typeof value === "string" && value.trim() !== "") folded = value.trim()
-      } catch {
-        folded = undefined
-      }
-      if (folded !== undefined) return folded
-      const events = session.snapshotEvents?.()
-      return events === undefined ? undefined : firstPromptText(events)
+      return serviceTitle(ctx, session) ?? firstPromptText(session.snapshotEvents?.() ?? [])
     } catch {
       return undefined
     }

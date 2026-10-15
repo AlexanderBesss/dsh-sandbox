@@ -1,11 +1,12 @@
-
 import { mkdirSync } from "node:fs"
 import { raceAbort } from "../utils/abort-race.ts"
 import { BootstrapLogger, installPlaywright, installRipgrep, probeBootstrap, uploadRunnerScript } from "./bootstrap.ts"
 import type { SandboxConfig } from "../config.ts"
-import { PathMapper, type SandboxMount } from "./paths.ts"
-import { containerNameFor, COMPOSE_PROJECT_LABEL, CONTAINER_PREFIX, composeProjectFor, DEFAULT_SESSION_ID, OWNERSHIP_LABEL, SESSION_LABEL, SandboxSessionError, type SandboxTarget } from "./session.ts"
-import { DockerTransport, failureDetail, isMissingContainerError, SandboxUnavailableError } from "./transport.ts"
+import { inspectContainerState, listOwnedContainers, phaseOfState, type ContainerInspect, type OwnedContainer } from "./provisioner/inspect.ts"
+import { buildRunArgs } from "./provisioner/run-args.ts"
+import type { PathMapper } from "./paths.ts"
+import { containerNameFor, CONTAINER_PREFIX, DEFAULT_SESSION_ID, SandboxSessionError, type SandboxTarget } from "./session.ts"
+import { DockerTransport, failureDetail, isMissingContainerError, SandboxUnavailableError, type SandboxFailureCode } from "./transport.ts"
 import type { WorktreeInfo } from "./worktrees.ts"
 
 export interface SandboxStatus {
@@ -22,26 +23,10 @@ export interface SandboxStatus {
   worktreeError?: string
 }
 
-interface ContainerInspect {
-  Name?: string
-  Created?: string
-  State?: { Status?: string; StartedAt?: string }
-  Config?: { Image?: string; Labels?: Record<string, string> }
-}
-
 export interface ProvisionerHooks {
   isSessionLive?(sessionId: string): boolean
   isSessionArchived?(sessionId: string): boolean
   onContainerReady?(target: SandboxTarget): void
-}
-
-function volumeArg(mount: SandboxMount): string {
-  return `${mount.hostPath.replace(/\\/g, "/")}:${mount.containerPath}`
-}
-
-function phaseOfState(state: string): string {
-  if (state === "") return "unknown"
-  return state[0]!.toUpperCase() + state.slice(1)
 }
 
 function sessionFromName(name: string): string {
@@ -68,54 +53,7 @@ export class Provisioner {
   ) {}
 
   runArgs(target: SandboxTarget): string[] {
-    const mounts = this.paths.mountsFor(target.workspace)
-    const args: string[] = [
-      "run",
-      "-d",
-      "--name",
-      target.container,
-      "--label",
-      OWNERSHIP_LABEL,
-      "--label",
-      `${SESSION_LABEL}=${target.sessionId}`,
-      "--label",
-      `${COMPOSE_PROJECT_LABEL}=${composeProjectFor(target.workspace)}`,
-      ...mounts.flatMap((mount) => ["-v", volumeArg(mount)]),
-      "-w",
-      this.paths.containerRoot(target.workspace),
-    ]
-
-    if (this.config.npmCacheHost !== "") {
-      args.push("-v", volumeArg({ hostPath: this.config.npmCacheHost, containerPath: "/root/.npm" }))
-    }
-
-    const extra = this.paths.extraMountFor(target.workspace)
-    if (extra !== undefined) {
-      args.push(
-        "-e",
-        `GIT_DIR=${extra.containerGitDir}`,
-        "-e",
-        `GIT_WORK_TREE=${this.paths.containerRoot(target.workspace)}`,
-      )
-      const mirrored = Object.entries(extra.gitConfig)
-      if (mirrored.length > 0) {
-        args.push("-e", `GIT_CONFIG_COUNT=${mirrored.length}`)
-        mirrored.forEach(([key, value], index) => {
-          args.push("-e", `GIT_CONFIG_KEY_${index}=${key}`, "-e", `GIT_CONFIG_VALUE_${index}=${value}`)
-        })
-      }
-    }
-
-    const limits = this.config.resourceLimits
-    const cpu = limits?.cpu.get()
-    const memory = limits?.memory.get()
-    const memorySwap = limits?.memorySwap.get()
-    if (cpu) args.push("--cpus", cpu)
-    if (memory) args.push("--memory", memory)
-    if (memorySwap) args.push("--memory-swap", memorySwap)
-
-    args.push(this.config.image.get(), ...this.config.command)
-    return args
+    return buildRunArgs(this.config, this.paths, target)
   }
 
   private assertProvisionable(sessionId: string): void {
@@ -159,7 +97,7 @@ export class Provisioner {
   }
 
   private async provision(target: SandboxTarget): Promise<SandboxTarget> {
-    const existing = await this.inspectState(target)
+    const existing = await inspectContainerState(this.transport, target.container)
 
     if (existing.state !== undefined && existing.owned !== true) {
       const detail = `the container name "${target.container}" is already used by a container this plugin does not own`
@@ -189,27 +127,33 @@ export class Provisioner {
     try {
       await this.transport.docker(this.runArgs(target), { timeoutMs: this.config.provisionTimeoutMs })
     } catch (error) {
-      const detail = failureDetail(error)
-      this.errors.set(target.sessionId, detail)
-      throw new SandboxUnavailableError(
-        `the sandbox container "${target.container}" could not be created (is the Docker daemon running?): ${detail}`,
-        error instanceof SandboxUnavailableError && error.code === "NAME_CONFLICT" ? "NAME_CONFLICT" : "DOCKER_UNREACHABLE",
-        detail,
+      const code: SandboxFailureCode =
+        error instanceof SandboxUnavailableError && error.code === "NAME_CONFLICT" ? "NAME_CONFLICT" : "DOCKER_UNREACHABLE"
+      this.failCreate(
+        target,
+        error,
+        `the sandbox container "${target.container}" could not be created (is the Docker daemon running?)`,
+        code,
       )
     }
     try {
       await this.waitRunning(target)
     } catch (error) {
-      const detail = failureDetail(error)
-      this.errors.set(target.sessionId, detail)
-      throw new SandboxUnavailableError(
-        `the sandbox container "${target.container}" did not reach Running within ${this.config.provisionTimeoutMs} ms: ${detail}`,
+      this.failCreate(
+        target,
+        error,
+        `the sandbox container "${target.container}" did not reach Running within ${this.config.provisionTimeoutMs} ms`,
         "DOCKER_UNREACHABLE",
-        detail,
       )
     }
     await this.bootstrap(target)
     return target
+  }
+
+  private failCreate(target: SandboxTarget, error: unknown, prefix: string, code: SandboxFailureCode): never {
+    const detail = failureDetail(error)
+    this.errors.set(target.sessionId, detail)
+    throw new SandboxUnavailableError(`${prefix}: ${detail}`, code, detail)
   }
 
   private async waitRunning(target: SandboxTarget): Promise<void> {
@@ -226,24 +170,8 @@ export class Provisioner {
     throw new SandboxUnavailableError(`timed out waiting for "${target.container}" to be Running`, "EXEC_TIMEOUT")
   }
 
-  private async inspectState(target: SandboxTarget): Promise<{ state?: string; owned?: boolean }> {
-    try {
-      const result = await this.transport.docker(
-        ["inspect", "--format", "{{.State.Status}}|{{.Config.Labels}}", target.container],
-        { timeoutMs: 30000 },
-      )
-      const text = result.stdout.toString("utf8").trim()
-      if (text === "") return {}
-      const [state = "", labels = ""] = text.split("|")
-      return { state: state === "" ? undefined : state, owned: /\bdsh\.sandbox:1\b/.test(labels) }
-    } catch (error) {
-      if (isMissingContainerError(error)) return {}
-      throw error
-    }
-  }
-
   async stateOf(target: SandboxTarget): Promise<string | undefined> {
-    return (await this.inspectState(target)).state
+    return (await inspectContainerState(this.transport, target.container)).state
   }
 
   async engineReachable(maxAgeMs = 10000): Promise<{ reachable: boolean; error?: string }> {
@@ -343,21 +271,12 @@ export class Provisioner {
     }
   }
 
-  async listOwned(): Promise<{ name: string; phase: string; createdAt?: string; sessionId?: string }[]> {
-    const ids = await this.transport.docker(["ps", "-aq", "--filter", `label=${OWNERSHIP_LABEL}`], { timeoutMs: 30000 })
-    const idList = ids.stdout
-      .toString("utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line !== "")
-    if (idList.length === 0) return []
-    const inspected = await this.transport.dockerJson<ContainerInspect[]>(["inspect", ...idList], { timeoutMs: 30000 })
-    return inspected.map((container) => ({
-      name: (container.Name ?? "").replace(/^\//, ""),
-      phase: phaseOfState(container.State?.Status ?? ""),
-      createdAt: container.Created,
-      sessionId: container.Config?.Labels?.[SESSION_LABEL],
-    }))
+  async listOwned(): Promise<OwnedContainer[]> {
+    return await listOwnedContainers(this.transport)
+  }
+
+  private async ownedContainers(): Promise<OwnedContainer[]> {
+    return await this.listOwned().catch(() => [])
   }
 
   async release(target: SandboxTarget): Promise<void> {
@@ -380,7 +299,7 @@ export class Provisioner {
       await this.releaseSession(sessionId)
       deleted.push(containerNameFor(sessionId))
     }
-    const owned = await this.listOwned().catch(() => [])
+    const owned = await this.ownedContainers()
     for (const container of owned) {
       if (container.sessionId === undefined || !archived.has(container.sessionId)) continue
       if (deleted.includes(container.name)) continue
@@ -395,7 +314,7 @@ export class Provisioner {
   }
 
   async releaseAll(): Promise<string[]> {
-    const owned = await this.listOwned().catch(() => [])
+    const owned = await this.ownedContainers()
     const deleted: string[] = []
     for (const container of owned) {
       await this.remove({ container: container.name })
@@ -417,7 +336,7 @@ export class Provisioner {
       this.tracked.delete(sessionId)
     }
 
-    const owned = await this.listOwned().catch(() => [])
+    const owned = await this.ownedContainers()
     for (const container of owned) {
       const sessionId = container.sessionId ?? sessionFromName(container.name)
       if (this.tracked.has(sessionId) || this.activeWork.has(sessionId)) continue

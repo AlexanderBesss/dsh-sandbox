@@ -67,29 +67,28 @@ export interface ResolveView {
   conflicts: number
 }
 
-export async function fetchSandboxStatus(sessionId: string): Promise<SandboxStatusView> {
-  const response = await fetch(`/sandbox/api/status?session=${encodeURIComponent(sessionId)}`, {
-    headers: { accept: "application/json" },
-  })
-  const body = (await response.json()) as
-    | { ok: true; data: SandboxStatusView }
-    | { ok: false; error?: { code?: string; message?: string } }
-  if (body.ok !== true) {
-    throw new Error(body.error?.message ?? `sandbox status failed with HTTP ${response.status}`)
-  }
-  return body.data
+interface ApiError {
+  code?: string
+  message?: string
 }
 
-async function postAction<T>(path: string, label: string): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { accept: "application/json" },
-  })
-  const body = (await response.json()) as { ok: true; data: T } | { ok: false; error?: { code?: string; message?: string } }
+type ApiEnvelope<T> = { ok: true; data: T } | { ok: false; error?: ApiError }
+
+async function requestJson<T>(path: string, label: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, { headers: { accept: "application/json" }, ...init })
+  const body = (await response.json()) as ApiEnvelope<T>
   if (body.ok !== true) {
     throw new Error(body.error?.message ?? `${label} failed with HTTP ${response.status}`)
   }
   return body.data
+}
+
+function postAction<T>(path: string, label: string): Promise<T> {
+  return requestJson<T>(path, label, { method: "POST" })
+}
+
+export function fetchSandboxStatus(sessionId: string): Promise<SandboxStatusView> {
+  return requestJson(`/sandbox/api/status?session=${encodeURIComponent(sessionId)}`, "sandbox status")
 }
 
 export function createMergeRequest(sessionId: string): Promise<MergeRequestView> {
@@ -111,11 +110,6 @@ export function cancelSubagent(sessionId: string, kind: SubagentKind): Promise<{
   )
 }
 
-export async function listSandboxContainers(): Promise<{ name: string; phase: string; createdAt?: string }[]> {
-  const response = await fetch("/sandbox/api/list", { headers: { accept: "application/json" } })
-  const body = (await response.json()) as
-    | { ok: true; data: { name: string; phase: string; createdAt?: string }[] }
-    | { ok: false; error?: { message?: string } }
-  if (body.ok !== true) throw new Error(body.error?.message ?? `sandbox list failed with HTTP ${response.status}`)
-  return body.data
+export function listSandboxContainers(): Promise<{ name: string; phase: string; createdAt?: string }[]> {
+  return requestJson("/sandbox/api/list", "sandbox list")
 }

@@ -1,4 +1,5 @@
 import type { CliRunner } from "./git.ts"
+import { tryStdout } from "./git/output.ts"
 import type { WorktreeEntry } from "./worktrees.ts"
 
 const REVIEW_MS = 30000
@@ -13,13 +14,12 @@ export interface SessionChanges {
   truncated: boolean
 }
 
-async function tryGit(git: CliRunner, args: string[], cwd: string, timeoutMs = REVIEW_MS): Promise<string | undefined> {
-  try {
-    const out = await git.run(args, { cwd, timeoutMs })
-    return out.stdout
-  } catch {
-    return undefined
-  }
+const tryGit = (git: CliRunner, args: string[], cwd: string, timeoutMs = REVIEW_MS): Promise<string | undefined> =>
+  tryStdout(git, args, cwd, timeoutMs)
+
+const trimmedOutput = (output: string | undefined): string | undefined => {
+  const trimmed = output?.trim()
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed
 }
 
 export async function forkPointFor(
@@ -27,10 +27,9 @@ export async function forkPointFor(
   tree: Pick<WorktreeEntry, "worktreePath" | "mainWorkspace">,
   timeoutMs = REVIEW_MS,
 ): Promise<string | undefined> {
-  const mainHead = await tryGit(git, ["symbolic-ref", "--short", "HEAD"], tree.mainWorkspace, timeoutMs)
-  if (mainHead === undefined || mainHead.trim() === "") return undefined
-  const merged = await tryGit(git, ["merge-base", "HEAD", mainHead.trim()], tree.worktreePath, timeoutMs)
-  return merged === undefined || merged.trim() === "" ? undefined : merged.trim()
+  const mainHead = trimmedOutput(await tryGit(git, ["symbolic-ref", "--short", "HEAD"], tree.mainWorkspace, timeoutMs))
+  if (mainHead === undefined) return undefined
+  return trimmedOutput(await tryGit(git, ["merge-base", "HEAD", mainHead], tree.worktreePath, timeoutMs))
 }
 
 export async function collectChanges(git: CliRunner, entry: WorktreeEntry): Promise<SessionChanges> {

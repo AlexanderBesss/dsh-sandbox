@@ -55,21 +55,28 @@ export function ripgrepInstallCommand(source: RipgrepSource): string {
 const failureMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
+async function runBootstrapInstall(
+  transport: DockerTransport,
+  target: SandboxTarget,
+  label: string,
+  command: string,
+  timeoutMs: number,
+  logger?: BootstrapLogger,
+): Promise<void> {
+  try {
+    await transport.execInContainer(target, ["sh", "-c", command], { timeoutMs })
+  } catch (error) {
+    logger?.warn?.(`${label} bootstrap failed in ${target.container}: ${failureMessage(error).slice(0, 300)}`)
+  }
+}
+
 export async function installRipgrep(
   transport: DockerTransport,
   target: SandboxTarget,
   source: RipgrepSource,
   logger?: BootstrapLogger,
 ): Promise<void> {
-  try {
-    await transport.execInContainer(
-      target,
-      ["sh", "-c", ripgrepInstallCommand(source)],
-      { timeoutMs: 180000 },
-    )
-  } catch (error) {
-    logger?.warn?.(`ripgrep bootstrap failed in ${target.container}: ${failureMessage(error).slice(0, 300)}`)
-  }
+  await runBootstrapInstall(transport, target, "ripgrep", ripgrepInstallCommand(source), 180000, logger)
 }
 
 const SAFE_VERSION = /^[0-9][0-9A-Za-z.+-]{0,31}$/
@@ -88,15 +95,7 @@ export async function installPlaywright(
   timeoutMs: number,
   logger?: BootstrapLogger,
 ): Promise<void> {
-  try {
-    await transport.execInContainer(
-      target,
-      ["sh", "-c", playwrightInstallCommand(browsers, version)],
-      { timeoutMs },
-    )
-  } catch (error) {
-    logger?.warn?.(`playwright bootstrap failed in ${target.container}: ${failureMessage(error).slice(0, 300)}`)
-  }
+  await runBootstrapInstall(transport, target, "playwright", playwrightInstallCommand(browsers, version), timeoutMs, logger)
 }
 
 export async function uploadRunnerScript(transport: DockerTransport, target: SandboxTarget): Promise<void> {

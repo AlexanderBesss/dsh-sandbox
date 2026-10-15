@@ -8,6 +8,13 @@ function row(label: string, value: string | undefined): string {
   return value === undefined || value === "" ? "" : `${label}: ${value}\n`
 }
 
+const DOT_BY_STATE = {
+  ready: DOT.success,
+  error: DOT.error,
+  absent: DOT.idle,
+  pending: DOT.warn,
+} as const
+
 export function ContainerChip({ sessionId }: ContainerChipProps) {
   const { status, error } = useSandboxStatus(sessionId)
   const { copied, markCopied } = useCopied()
@@ -21,13 +28,7 @@ export function ContainerChip({ sessionId }: ContainerChipProps) {
     ? error === undefined ? "pending" : "error"
     : status.ready ? "ready" : status.phase === "absent" ? "absent" : "pending"
 
-  const dotColor = state === "ready"
-    ? DOT.success
-    : state === "error"
-      ? DOT.error
-      : state === "absent"
-        ? DOT.idle
-        : DOT.warn
+  const dotColor = DOT_BY_STATE[state]
 
   const label = status?.container ?? (error === undefined ? "sandbox…" : "sandbox")
 

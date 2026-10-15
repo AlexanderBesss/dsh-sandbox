@@ -11,15 +11,6 @@ export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal, onAbort: 
       }
     }
     signal.addEventListener("abort", abort, { once: true })
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", abort)
-        resolve(value)
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", abort)
-        reject(error)
-      },
-    )
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
   })
 }
