@@ -27,10 +27,23 @@ Full list with defaults: [src/config.ts](src/config.ts).
 | `bootstrapTools` / `bootstrapPlaywright` | `true` | ripgrep / Playwright install on first use |
 | `worktree` + `worktree*` | `false` | per-chat `git worktree` and branch (see below) |
 | `resourceLimits` | empty | `--cpus` / `--memory` / `--memory-swap` |
+| `apiToken` | `""` | bearer secret `/sandbox/api` requires; empty leaves the harness browser session as the only gate |
+
+`apiToken` is volatile, so a reload applies it without a restart.
+
+## API access
+
+`/sandbox/api` is the plugin's only HTTP route, and it changes state: merge request, review, resolve conflicts, cancel a subagent. It rides the harness web server, which binds loopback only (`--host 0.0.0.0` is refused) — but a sandbox container reaches host loopback through `host.docker.internal`, so the route is authenticated, not merely origin-checked. With no token the route admits exactly what the harness admits on its own `/api`: the request must pass the harness Host/Origin fence and carry the signed browser-session cookie. The web GUI and the desktop app carry it automatically (the desktop bridge forwards the cookie while stripping `Origin`); curl, scripts, and container code have no cookie and get 401. Set `apiToken` to let scripted callers in: they must send `authorization: Bearer <token>`, and a valid token skips the browser session. The built-in UI never sends the token, so leave it empty unless you script the API.
 
 ## Worktree mode
 
 `worktree: true` gives each chat its own worktree and branch (`dsh-sbx/<chat-title>-<digest>`), based on `origin/<main>` and kept merged with it. A dirty worktree is never touched; a conflicted merge waits for the chat or the *resolve conflicts* button. The header gains *merge request* (commit, push, PR through `gh`), *review*, and *resolve conflicts* buttons; unmerged or dirty worktrees are never pruned.
+
+### Host git
+
+Worktree mode runs `git` on the host against a repository the container can write to, so the container's `.git` is untrusted config. Every plugin-driven call carries `-c` overrides and env that outrank config files: hooks (`core.hooksPath` points at an empty directory), `core.fsmonitor`, `core.pager`, editors, `core.askPass` with `GIT_ASKPASS`/`SSH_ASKPASS`, `core.sshCommand=ssh`, `ext::` transport (`protocol.ext.allow=never`, `GIT_ALLOW_PROTOCOL=https:ssh:file`) and terminal prompts. Repo-level `credential.helper` is cleared, then the operator's own `system`/`global` helpers are re-appended; `gh` gets the same overrides through `GIT_CONFIG_*`, since it rejects `-c`.
+
+Two things have no fixed key name to pin, so they abort the call (`GIT_FAILED`) instead: a `filter.*.clean|smudge|process|required` or `alias.*` whose value starts with `!`, and `[include].path`/`[include].if` in local or worktree config. Costs to expect: your own repository hooks do not run for plugin-driven git, and `git://` or `http://` remotes are refused. A filter named by an attribute and defined in your global or system config still runs — the refusal covers only what the container can write.
 
 ## Development
 

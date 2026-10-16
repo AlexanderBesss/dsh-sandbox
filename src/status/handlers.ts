@@ -1,4 +1,4 @@
-import type { LiveAgent, SandboxContext, SubagentRun, SubagentService } from "../context.ts"
+import type { ConnectionService, LiveAgent, SandboxContext, SubagentRun, SubagentService } from "../context.ts"
 import type { SandboxConfig } from "../config.ts"
 import { PathMapper } from "../container/paths.ts"
 import { Provisioner } from "../container/provisioner.ts"
@@ -14,6 +14,7 @@ export interface StatusDeps {
   provisioner: Provisioner
   paths: PathMapper
   config: SandboxConfig
+  connection?: ConnectionService
   worktrees?: WorktreeManager
   subagents?: () => SubagentService | undefined
   resolvers: ResolverGuard

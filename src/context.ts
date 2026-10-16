@@ -40,6 +40,12 @@ export interface WebServerService {
   register(route: WebRoute): () => void
 }
 
+export type ConnectionAdmission = { peer: unknown } | { rejection: number }
+
+export interface ConnectionService {
+  admit(request: IncomingMessage): ConnectionAdmission
+}
+
 export interface WorkspaceRegistryService {
   readonly archivedSessionIds: readonly string[]
 }
@@ -78,6 +84,7 @@ export type SandboxContext = Context & {
   sessions: SessionService
   terminals: TerminalSessionService
   webServer: WebServerService
+  connection?: ConnectionService
   workspaceRegistry?: WorkspaceRegistryService
   subagents?: SubagentService
 }

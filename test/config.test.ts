@@ -52,4 +52,12 @@ describe('Config', () => {
   it('lets worktree mode be toggled live', () => {
     expect(Config({ worktree: true }).worktree.get()).toBe(true)
   })
+
+  it('defaults the API gate to the harness browser session', () => {
+    expect(Config({}).apiToken.get()).toBe('')
+  })
+
+  it('carries a bearer token through a reload', () => {
+    expect(Config({ apiToken: 's3cret' }).apiToken.get()).toBe('s3cret')
+  })
 })

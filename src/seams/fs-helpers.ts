@@ -64,3 +64,7 @@ export function notFoundError(action: string, target: FsTarget): FsError {
 export function notRegularFileError(action: string, target: FsTarget): FsError {
   return new FsError(`cannot ${action} "${target.displayPath}": not a regular file`, "FS_NOT_REGULAR_FILE")
 }
+
+export function outsideSandboxError(displayPath: string): FsError {
+  return new FsError(`"${displayPath}" resolves outside the sandbox mount`, "FS_IO_ERROR")
+}

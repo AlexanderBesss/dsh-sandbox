@@ -27,14 +27,14 @@ import {
   typeOf,
   typeOfDirent,
 } from "./fs-helpers.ts"
-import { childTarget, fsHostOf, fsTargetFor, type FsDeps } from "./fs/targets.ts"
+import { childTarget, fsHostOf, fsHostPath, fsTargetFor, type FsDeps, type HostRealpath } from "./fs/targets.ts"
 import { readArgs, readByteRangeFrom, readHost, streamTextFrom } from "./fs/read.ts"
 import { applyEdit } from "./fs/edit.ts"
 import { guardToken, writeHost } from "./fs/write.ts"
 import { watchHost } from "./fs/watch.ts"
 
 export { endingsAdapted } from "./fs/edit.ts"
-export type { FsDeps }
+export type { FsDeps, HostRealpath }
 
 const DIFF_BASIS_MAX_BYTES = 64_000
 
@@ -55,7 +55,7 @@ export class DockerFileSystem extends FileSystem {
   }
 
   override processPath(target: FsTarget): string {
-    return this.hostOf(target)
+    return this.lexicalHost(target)
   }
 
   override fileUrl(target: FsTarget): string {
@@ -76,16 +76,22 @@ export class DockerFileSystem extends FileSystem {
     return child === parent || child.startsWith(`${parent}/`)
   }
 
-  private hostOf(target: FsTarget): string {
+  private lexicalHost(target: FsTarget): string {
+    return fsHostPath(this.ctx, this.deps, target)
+  }
+
+  private async hostOf(target: FsTarget): Promise<string> {
     return fsHostOf(this.ctx, this.deps, target)
   }
 
   async stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> {
     checkSignal(signal)
-    const host = this.hostOf(target)
+    // Containment is enforced on the resolved path, but the metadata comes from the lexical path:
+    // an in-mount symlink has to report as a symlink, the way listDir already reports it.
+    await this.hostOf(target)
     let st: FileStat
     try {
-      st = await lstat(host)
+      st = await lstat(this.lexicalHost(target))
     } catch (error) {
       if (isNotFound(error)) return undefined
       throw ioError("stat", target, error)
@@ -106,7 +112,7 @@ export class DockerFileSystem extends FileSystem {
     const options = isSignal ? undefined : optionsOrSignal
     const signal = isSignal ? optionsOrSignal : maybeSignal
     checkSignal(signal)
-    const host = this.hostOf(target)
+    const host = await this.hostOf(target)
     let dirents: Dirent[]
     try {
       dirents = await readdir(host, { withFileTypes: true })
@@ -137,7 +143,7 @@ export class DockerFileSystem extends FileSystem {
 
   private async readRaw(target: FsTarget, maxBytes: number, signal?: AbortSignal) {
     checkSignal(signal)
-    return readHost(this.hostOf(target), target, maxBytes)
+    return readHost(await this.hostOf(target), target, maxBytes)
   }
 
   async readText(target: FsTarget, optionsOrSignal?: { maxBytes?: number } | AbortSignal, maybeSignal?: AbortSignal): Promise<string> {
@@ -170,17 +176,17 @@ export class DockerFileSystem extends FileSystem {
 
   private async *streamFrom(target: FsTarget, signal?: AbortSignal): AsyncGenerator<string> {
     checkSignal(signal)
-    yield* streamTextFrom(this.hostOf(target), target, signal)
+    yield* streamTextFrom(await this.hostOf(target), target, signal)
   }
 
   override async readByteRange(target: FsTarget, range: { offset: number; length: number }, signal?: AbortSignal): Promise<Buffer> {
     checkSignal(signal)
-    return readByteRangeFrom(this.hostOf(target), target, range)
+    return readByteRangeFrom(await this.hostOf(target), target, range)
   }
 
   private async writeRaw(target: FsTarget, content: string | Buffer, token: string, signal?: AbortSignal): Promise<{ version: FsVersion; created: boolean }> {
     checkSignal(signal)
-    return writeHost(this.hostOf(target), target, content, token, signal)
+    return writeHost(await this.hostOf(target), target, content, token, signal)
   }
 
   async writeText(target: FsTarget, content: string, expected?: FsWriteIntent | FsVersion | null, signal?: AbortSignal): Promise<FsWriteOutcome> {
@@ -220,7 +226,7 @@ export class DockerFileSystem extends FileSystem {
 
   async watch(target: FsTarget, changed: () => void, signal?: AbortSignal): Promise<() => Promise<void>> {
     checkSignal(signal)
-    return watchHost(this.hostOf(target), target, changed, signal)
+    return watchHost(await this.hostOf(target), target, changed, signal)
   }
 
   override get sandboxMode(): string | undefined {

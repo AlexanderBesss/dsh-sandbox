@@ -52,6 +52,7 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     prBriefTimeoutMs: 120000,
     gitArgv: ['git'],
     ghArgv: ['gh'],
+    apiToken: '',
     ...overrides,
   }
   plain.resourceLimits = { cpu: '', memory: '', memorySwap: '', ...overrides.resourceLimits }
@@ -68,6 +69,7 @@ export function testConfig(overrides: PlainPartial<Plain<SandboxConfig>> = {}): 
     worktreeSync: ref(plain.worktreeSync),
     worktreeInstall: ref(plain.worktreeInstall),
     prBrief: ref(plain.prBrief),
+    apiToken: ref(plain.apiToken),
     resourceLimits: {
       cpu: ref(plain.resourceLimits.cpu),
       memory: ref(plain.resourceLimits.memory),

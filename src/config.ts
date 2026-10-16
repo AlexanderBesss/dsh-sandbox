@@ -91,6 +91,10 @@ export const Config = Schema.object({
   gitArgv: Schema.array(Schema.string()).default(["git"]),
 
   ghArgv: Schema.array(Schema.string()).default(["gh"]),
+
+  apiToken: Schema.string().default("").volatile().description(
+    "bearer secret the /sandbox/api route requires; empty leaves the harness browser session (its Host/Origin fence plus the signed session cookie) as the only gate",
+  ),
 })
 
 export type SandboxConfig = ReturnType<typeof Config>

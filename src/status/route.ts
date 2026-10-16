@@ -10,7 +10,7 @@ import {
   subagentKindOf,
   type StatusDeps,
 } from "./handlers.ts"
-import { failure, sameOrigin, writeJson, type Respond } from "./respond.ts"
+import { authorize, failure, writeJson, type Respond } from "./respond.ts"
 import { subagentViews } from "./run-registry.ts"
 
 const ROUTE_PATH = "/sandbox/api"
@@ -72,8 +72,9 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
     handler: async (request: IncomingMessage, response: ServerResponse) => {
       const isPost = request.method === "POST"
       const respond: Respond = (status, body) => writeJson(request, response, status, body)
-      if (!sameOrigin(request)) {
-        respond(403, failure("forbidden", "same-origin requests only"))
+      const authorization = authorize(request, deps.config, deps.connection)
+      if (!authorization.allowed) {
+        respond(authorization.status, failure(authorization.code, authorization.message))
         return
       }
       if (request.method !== "GET" && request.method !== "HEAD" && !isPost) {

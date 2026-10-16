@@ -11,6 +11,7 @@ import {
   type StatusDeps,
 } from '../src/status.ts'
 import type { DurableUserMessage, SandboxContext, SubagentResult, WebRoute } from '../src/context.ts'
+import { testConfig } from './helpers.ts'
 
 const SESSION = 'session-3'
 const WORKSPACE = 'F:\\Projects\\dsh-sandbox'
@@ -91,6 +92,8 @@ async function flush(): Promise<void> {
 
 function reviewDeps(subagents: () => unknown, runs = createSubagentRunRegistry()): StatusDeps {
   return {
+    config: testConfig(),
+    connection: { admit: () => ({ peer: {} }) },
     worktrees: { reviewFor: async () => ({ entry: wtEntry, changes }), info: async () => undefined, failureFor: () => undefined },
     runs,
     subagents,
@@ -99,6 +102,8 @@ function reviewDeps(subagents: () => unknown, runs = createSubagentRunRegistry()
 
 function resolveDeps(subagents: () => unknown, runs = createSubagentRunRegistry(), resolvers = createResolverGuard()): StatusDeps {
   return {
+    config: testConfig(),
+    connection: { admit: () => ({ peer: {} }) },
     worktrees: { conflictsFor: async () => ({ entry: wtEntry, facts: midMerge }) },
     runs,
     resolvers,
@@ -293,7 +298,7 @@ describe('the cancel-subagent route', () => {
       agents,
     } as unknown as SandboxContext
     registerStatusRoute(ctx, deps)
-    const request = { method: 'POST', url, headers: { host: HOST } } as IncomingMessage
+    const request = { method: 'POST', url, headers: { host: HOST, origin: `http://${HOST}` } } as IncomingMessage
     let status = 0
     let body: unknown
     const response = {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { handleMergeRequest, handleResolveConflicts, handleReview, createResolverGuard, createSubagentRunRegistry, registerStatusRoute, sameOrigin, type StatusDeps } from '../src/status.ts'
+import { handleMergeRequest, handleResolveConflicts, handleReview, authorize, createResolverGuard, createSubagentRunRegistry, registerStatusRoute, type StatusDeps } from '../src/status.ts'
+import type { SandboxConfig } from '../src/config.ts'
+import type { ConnectionAdmission, ConnectionService } from '../src/context.ts'
+import { testConfig } from './helpers.ts'
 import type { SandboxContext, WebRoute } from '../src/context.ts'
 
 function request(headers: Record<string, string>): IncomingMessage {
@@ -9,35 +12,74 @@ function request(headers: Record<string, string>): IncomingMessage {
 
 const HOST = '127.0.0.1:19387'
 
-describe('sameOrigin', () => {
-  it('accepts the app renderer bridged from the dsh-app scheme', () => {
-    expect(sameOrigin(request({ host: HOST, origin: 'dsh-app://app' }))).toBe(true)
+function configStub(apiToken = ''): SandboxConfig {
+  return testConfig({ apiToken })
+}
+
+function connectionStub(admit: (request: IncomingMessage) => ConnectionAdmission): ConnectionService {
+  return { admit }
+}
+
+const admitted = connectionStub(() => ({ peer: {} }))
+
+function fenceRejects(status: number): ConnectionService {
+  return connectionStub(() => ({ rejection: status }))
+}
+
+function denyCode(headers: Record<string, string>, config = configStub(), connection = admitted): string {
+  const decision = authorize(request(headers), config, connection)
+  return decision.allowed ? '' : decision.code
+}
+
+function denyStatus(headers: Record<string, string>, config = configStub(), connection = admitted): number {
+  const decision = authorize(request(headers), config, connection)
+  return decision.allowed ? 0 : decision.status
+}
+
+describe('authorize', () => {
+  it('refuses a request with no Host header', () => {
+    expect(denyCode({ origin: `http://${HOST}` })).toBe('bad-request')
   })
 
-  it('accepts a bridged request whose Origin was stripped', () => {
-    expect(sameOrigin(request({ host: HOST }))).toBe(true)
+  it('accepts the desktop bridge shape: no Origin, admitted by the harness session', () => {
+    expect(denyCode({ host: HOST })).toBe('')
   })
 
-  it('accepts a direct same-origin browser request', () => {
-    expect(sameOrigin(request({ host: HOST, origin: `http://${HOST}` }))).toBe(true)
+  it('accepts a web-profile request the harness admits', () => {
+    expect(denyCode({ host: HOST, origin: `http://${HOST}`, cookie: 'dsh-session=sig' })).toBe('')
   })
 
-  it('refuses a cross-site web origin', () => {
-    expect(sameOrigin(request({ host: HOST, origin: 'https://evil.example' }))).toBe(false)
+  it('refuses what the harness fence rejects on Host or Origin', () => {
+    expect(denyCode({ host: 'evil.example', origin: 'http://evil.example' }, configStub(), fenceRejects(403))).toBe('forbidden')
+    expect(denyStatus({ host: 'evil.example' }, configStub(), fenceRejects(403))).toBe(403)
   })
 
-  it('refuses the same host on another port', () => {
-    expect(sameOrigin(request({ host: HOST, origin: 'http://127.0.0.1:9999' }))).toBe(false)
+  it('refuses a request without the signed browser session', () => {
+    expect(denyCode({ host: HOST }, configStub(), fenceRejects(401))).toBe('unauthorized')
+    expect(denyStatus({ host: HOST }, configStub(), fenceRejects(401))).toBe(401)
   })
 
-  it('refuses what the client itself reports as cross-site', () => {
-    expect(
-      sameOrigin(request({ host: HOST, origin: `http://${HOST}`, 'sec-fetch-site': 'cross-site' })),
-    ).toBe(false)
+  it('refuses when the composition provides no harness connection to admit through', () => {
+    const decision = authorize(request({ host: HOST, origin: `http://${HOST}` }), configStub(), undefined)
+    expect(decision.allowed ? '' : decision.code).toBe('unauthorized')
   })
 
-  it('refuses a malformed Origin', () => {
-    expect(sameOrigin(request({ host: HOST, origin: 'not a url' }))).toBe(false)
+  it('accepts an Origin-less scripted call that carries the bearer token', () => {
+    expect(denyCode({ host: HOST, authorization: 'Bearer s3cret' }, configStub('s3cret'), fenceRejects(401))).toBe('')
+  })
+
+  it('refuses a wrong, short, or missing bearer token', () => {
+    expect(denyCode({ host: HOST, authorization: 'Bearer s3cre' }, configStub('s3cret'))).toBe('unauthorized')
+    expect(denyCode({ host: HOST, authorization: 'Bearer secret-sauce' }, configStub('s3cret'))).toBe('unauthorized')
+    expect(denyCode({ host: HOST, authorization: 's3cret' }, configStub('s3cret'))).toBe('unauthorized')
+    expect(denyCode({ host: HOST, origin: `http://${HOST}` }, configStub('s3cret'))).toBe('unauthorized')
+  })
+
+  it('never consults the harness session once the token matches', () => {
+    const never = connectionStub(() => {
+      throw new Error('admit must not run when a token is configured')
+    })
+    expect(denyCode({ host: HOST, origin: 'https://evil.example', authorization: 'Bearer s3cret' }, configStub('s3cret'), never)).toBe('')
   })
 })
 
@@ -189,8 +231,12 @@ function resolveDepsFor(
   subagents?: () => unknown,
   resolvers = createResolverGuard(),
   runs = createSubagentRunRegistry(),
+  config = configStub(),
+  connection = admitted,
 ): StatusDeps {
   return {
+    config,
+    connection,
     worktrees: { conflictsFor: async () => bundle },
     resolvers,
     runs,
@@ -357,6 +403,7 @@ describe('the /sandbox/api dispatch', () => {
     url: string,
     deps: StatusDeps,
     agents: unknown,
+    headers: Record<string, string> = { host: HOST, origin: `http://${HOST}` },
   ): Promise<{ status: number; body: unknown }> {
     let handler: WebRoute['handler'] | undefined
     const ctx = {
@@ -366,7 +413,7 @@ describe('the /sandbox/api dispatch', () => {
       agents,
     } as unknown as SandboxContext
     registerStatusRoute(ctx, deps)
-    const request = { method: 'POST', url, headers: { host: HOST } } as IncomingMessage
+    const request = { method: 'POST', url, headers } as IncomingMessage
     let status = 0
     let body: unknown
     const response = {
@@ -392,6 +439,73 @@ describe('the /sandbox/api dispatch', () => {
     expect(answer.status).toBe(200)
     expect(started).toBe(1)
     expect((answer.body as { data: { childSessionId: string } }).data.childSessionId).toBe('child-1')
+  })
+
+  function resolverStarted(counter: { starts: number; child: string }) {
+    return () => ({
+      list: () => ['inline'],
+      start: async () => {
+        counter.starts += 1
+        return {
+          localAgent: { session: { id: counter.child } },
+          result: Promise.resolve({ stopReason: 'completed', output: [] }),
+        }
+      },
+    })
+  }
+
+  it('runs the action for an Origin-less POST once the harness admits the session', async () => {
+    const counter = { starts: 0, child: 'child-1' }
+    const deps = resolveDepsFor({ entry: wtEntry, facts: midMerge }, resolverStarted(counter))
+    const answer = await dispatch(
+      `/sandbox/api/resolve-conflicts?session=${SESSION}`,
+      deps,
+      { get: () => ({ id: SESSION }) },
+      { host: HOST },
+    )
+    expect(answer.status).toBe(200)
+    expect(counter.starts).toBe(1)
+  })
+
+  it('refuses an Origin-less POST at the gate when the harness session is missing', async () => {
+    const counter = { starts: 0, child: 'child-1' }
+    const deps = resolveDepsFor(
+      { entry: wtEntry, facts: midMerge },
+      resolverStarted(counter),
+      createResolverGuard(),
+      createSubagentRunRegistry(),
+      configStub(),
+      fenceRejects(401),
+    )
+    const answer = await dispatch(
+      `/sandbox/api/resolve-conflicts?session=${SESSION}`,
+      deps,
+      { get: () => ({ id: SESSION }) },
+      { host: HOST },
+    )
+    expect(answer.status).toBe(401)
+    expect(errorCode(answer.body)).toBe('unauthorized')
+    expect(counter.starts).toBe(0)
+  })
+
+  it('runs the action for an Origin-less POST once a token is configured', async () => {
+    const counter = { starts: 0, child: 'child-9' }
+    const deps = resolveDepsFor(
+      { entry: wtEntry, facts: midMerge },
+      resolverStarted(counter),
+      createResolverGuard(),
+      createSubagentRunRegistry(),
+      configStub('s3cret'),
+    )
+    const answer = await dispatch(
+      `/sandbox/api/resolve-conflicts?session=${SESSION}`,
+      deps,
+      { get: () => ({ id: SESSION }) },
+      { host: HOST, authorization: 'Bearer s3cret' },
+    )
+    expect(answer.status).toBe(200)
+    expect(counter.starts).toBe(1)
+    expect((answer.body as { data: { childSessionId: string } }).data.childSessionId).toBe('child-9')
   })
 })
 

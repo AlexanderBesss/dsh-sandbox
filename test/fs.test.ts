@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -31,6 +32,17 @@ afterAll(async () => {
 })
 
 const host = (...parts: string[]) => join(workspace, ...parts)
+
+function contextFor(cwd: string): SandboxContext {
+  return {
+    agents: {
+      currentInitiator: () => ({ id: 'session-1', session: { id: 'session-1', header: { cwd } } }),
+    },
+    sessions: {
+      get: (id: string) => (id === 'session-1' ? { id, header: { cwd } } : undefined),
+    },
+  } as unknown as SandboxContext
+}
 
 describe.skipIf(posix)('DockerFileSystem.resolve', () => {
   it('stamps the container path and the host path of the same file', () => {
@@ -263,6 +275,135 @@ describe.skipIf(posix)('DockerFileSystem.watch', () => {
       expect(fired).toBe(true)
     } finally {
       await stop()
+    }
+  })
+})
+
+describe.skipIf(posix)('DockerFileSystem symlink containment', () => {
+  let outside = ''
+
+  beforeAll(async () => {
+    outside = await mkdtemp(join(tmpdir(), 'dsh-fs-outside-'))
+  })
+
+  afterAll(async () => {
+    await rm(outside, { recursive: true, force: true })
+  })
+
+  const seam = (realpath?: (path: string) => Promise<string>) => new DockerFileSystem(contextFor(workspace), {
+    paths: new PathMapper('workspace', '/workspace'),
+    config: testConfig(),
+    ...(realpath === undefined ? {} : { realpath }),
+  })
+
+  const enoent = (path: string) => Object.assign(new Error(`ENOENT: no such file or directory, lstat '${path}'`), { code: 'ENOENT' })
+
+  function fakeRealpath(links: Record<string, string>): (path: string) => Promise<string> {
+    const entries = Object.entries(links)
+    return async (path) => {
+      for (const [from, to] of entries) {
+        if (path === from) return to
+        if (path.startsWith(`${from}\\`)) return `${to}${path.slice(from.length)}`
+      }
+      if (!existsSync(path)) throw enoent(path)
+      return path
+    }
+  }
+
+  const refused = async (call: Promise<unknown>) => {
+    try {
+      await call
+      expect.unreachable('the escaping path should have been refused')
+    } catch (error) {
+      expect((error as FsError).code).toBe('FS_IO_ERROR')
+      expect((error as FsError).message).toMatch(/outside the sandbox mount/)
+    }
+  }
+
+  const drain = async (read: Promise<AsyncIterable<string>>) => {
+    for await (const chunk of await read) void chunk
+  }
+
+  it('refuses every read of a path that resolves outside the mount', async () => {
+    const evil = seam(fakeRealpath({ [host('evil.txt')]: join(outside, 'key.txt') }))
+    await refused(evil.stat(evil.resolve('evil.txt')))
+    await refused(evil.readText(evil.resolve('evil.txt')))
+    await refused(evil.readBytes(evil.resolve('evil.txt')))
+    await refused(evil.readByteRange(evil.resolve('evil.txt'), { offset: 0, length: 4 }))
+    await refused(drain(evil.streamText(evil.resolve('evil.txt'))))
+  })
+
+  it('refuses a write or edit that would land outside the mount, and leaves the host file alone', async () => {
+    const key = join(outside, 'key.txt')
+    await writeFile(key, 'secret')
+    const evil = seam(fakeRealpath({ [host('evil.txt')]: key }))
+    await refused(evil.writeText(evil.resolve('evil.txt'), 'pwned'))
+    await refused(evil.editText(evil.resolve('evil.txt'), { oldString: 'secret', newString: 'pwned' }))
+    expect(await readFile(key, 'utf8')).toBe('secret')
+  })
+
+  it('refuses to list or watch a directory that resolves outside the mount', async () => {
+    const evil = seam(fakeRealpath({ [host('linkdir')]: outside }))
+    await refused(evil.listDir(evil.resolve('linkdir')))
+    await refused(evil.watch(evil.resolve('linkdir'), () => {}))
+  })
+
+  it('refuses a child of a listed directory once its resolved path escapes the mount', async () => {
+    await mkdir(host('linkdir'), { recursive: true })
+    await writeFile(host('linkdir', 'config'), 'in place')
+    const evil = seam(fakeRealpath({ [join(host('linkdir'), 'config')]: join(outside, 'config') }))
+    const entries = await evil.listDir(evil.resolve('linkdir'))
+    const escaped = entries.find((entry) => entry.name === 'config')?.target
+    expect(escaped).toBeDefined()
+    await refused(evil.readText(escaped!))
+  })
+
+  it('still creates a brand-new file when the ancestor chain resolves inside the mount', async () => {
+    const fresh = seam(fakeRealpath({}))
+    const written = await fresh.writeText(fresh.resolve('fresh/nested/new.txt'), 'created')
+    expect(written.operation).toBe('create')
+    expect(await readFile(host('fresh', 'nested', 'new.txt'), 'utf8')).toBe('created')
+    expect(await fresh.readText(fresh.resolve('fresh/nested/new.txt'))).toBe('created')
+
+    const plain = seam()
+    expect((await plain.writeText(plain.resolve('plain/new.txt'), 'real')).operation).toBe('create')
+    expect(await readFile(host('plain', 'new.txt'), 'utf8')).toBe('real')
+  })
+
+  it('checks containment against the resolved mount root, not the lexical one', async () => {
+    await writeFile(host('anchor.txt'), 'here')
+    const moved = seam(async (path) => {
+      if (path === workspace) return join(outside, 'workspace-was')
+      if (!existsSync(path)) throw enoent(path)
+      return path
+    })
+    await refused(moved.readText(moved.resolve('anchor.txt')))
+  })
+
+  it('follows a real symlink that stays inside the mount and refuses one that leaves it', async () => {
+    await writeFile(host('real-target.txt'), 'inside')
+    await writeFile(join(outside, 'real-target.txt'), 'outside')
+    try {
+      await symlink(host('real-target.txt'), host('inner-link.txt'))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+        console.log('real-symlink case skipped: the platform refused to create a symlink')
+        return
+      }
+      throw error
+    }
+    try {
+      expect(await fs.readText(fs.resolve('inner-link.txt'))).toBe('inside')
+      const viaStat = await fs.stat(fs.resolve('inner-link.txt'))
+      const listed = (await fs.listDir(fs.resolve(''))).find((entry) => entry.name === 'inner-link.txt')
+      expect(viaStat?.type).toBe('symlink')
+      expect(listed?.type).toBe('symlink')
+      await symlink(join(outside, 'real-target.txt'), host('real-link.txt'))
+      await refused(fs.readText(fs.resolve('real-link.txt')))
+      await refused(fs.writeText(fs.resolve('real-link.txt'), 'pwned'))
+      expect(await readFile(join(outside, 'real-target.txt'), 'utf8')).toBe('outside')
+    } finally {
+      await rm(host('real-link.txt'), { force: true })
     }
   })
 })

@@ -21,7 +21,7 @@ import { WorktreeManager, type WorktreeEntry } from "./container/worktrees.ts"
 
 export const name = "docker-sandbox"
 
-export const inject = ["agents", "sessions", "webServer"]
+export const inject = ["agents", "sessions", "webServer", "connection"]
 
 export { Config }
 
@@ -100,6 +100,7 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     provisioner,
     paths,
     config,
+    connection: ctx.connection,
     worktrees,
     subagents: () => subagents,
     resolvers: createResolverGuard(),

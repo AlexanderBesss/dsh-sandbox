@@ -1,4 +1,4 @@
-export { sameOrigin } from "./status/respond.ts"
+export { authorize, type Authorization } from "./status/respond.ts"
 export { CONFLICT_SETTLEMENT, REVIEW_SETTLEMENT, settlementMessage, settleSubagentRun } from "./status/settlement.ts"
 export type { SettlementKind } from "./status/settlement.ts"
 export { createResolverGuard } from "./status/resolver-guard.ts"
