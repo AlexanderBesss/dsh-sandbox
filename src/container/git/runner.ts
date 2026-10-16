@@ -52,7 +52,8 @@ interface HardenedInvocation {
 let emptyHooks: string | undefined
 
 // An empty hooksPath disables the repository's own hooks for plugin-driven git
-// operations; the container still runs its hooks inside the container.
+// operations; the shared hooks directory is also overlaid read-only, so a container
+// cannot install one either.
 function emptyHooksDir(): string {
   if (emptyHooks === undefined) {
     emptyHooks = join(tmpdir(), "dsh-docker-sandbox-empty-hooks")
@@ -205,10 +206,12 @@ function namedAttributeFilters(text: string): Set<string> {
   return names
 }
 
-// The container can rewrite <gitDir>/config and <gitDir>/info/attributes. Fixed-name keys are
-// pinned by the -c prefix; these three survive because -c cannot outrank them — filter and alias
-// names are attacker-chosen, and an included file is never read. A !-valued filter runs on the
-// host during add, merge and checkout, so it aborts the call instead; git-lfs does not use !.
+// Backstop for the read-only overlays in worktrees/checkout.ts: if anything does write
+// <gitDir>/config, config.worktree or info/attributes, fixed-name keys are already pinned by
+// the -c prefix and these survive because -c cannot outrank them — filter and alias names are
+// attacker-chosen, and an included file is never read. A !-valued filter runs on the host
+// during add, merge and checkout, so it aborts the call instead; git-lfs does not use !, and
+// a non-! filter is only reachable through a config file the container cannot write.
 function tamperReason(entries: ConfigEntry[], filters: Set<string>): string | undefined {
   for (const { key, value } of entries) {
     if (/^filter\.[^.]+\.(clean|smudge|process|required)$/.test(key) && value.startsWith("!")) {
@@ -219,6 +222,7 @@ function tamperReason(entries: ConfigEntry[], filters: Set<string>): string | un
     }
     if (key.startsWith("alias.") && value.startsWith("!")) return `${key} is a shell command`
     if (key === "include.path" || key === "include.if") return `${key} pulls in another config file`
+    if (/^includeif\..+\.(path|if)$/.test(key)) return `${key} pulls in another config file`
   }
   return undefined
 }

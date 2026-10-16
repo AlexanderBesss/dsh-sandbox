@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CliCommandError, type CliResult, type CliRunner } from '../src/container/git.ts'
 import { PathMapper } from '../src/container/paths.ts'
 import { slugDigest } from '../src/container/session.ts'
-import type { WorktreeEntry } from '../src/container/worktrees.ts'
+import type { WorktreeEntry, MergeRequestResult } from '../src/container/worktrees.ts'
 import { WorktreeManager, compareUrlFor } from '../src/container/worktrees.ts'
 import { testConfig } from './helpers.ts'
 
@@ -272,11 +272,18 @@ describe('WorktreeManager.ensure', () => {
 })
 
 describe('WorktreeManager.mergeRequest', () => {
+  // merge-request acts on a worktree that already exists; ensure() stands in for the
+  // turn-start gate that created it.
+  function mergeExisting(manager: WorktreeManager, workspace: string): Promise<MergeRequestResult> {
+    manager.ensure('session-3', workspace)
+    return manager.mergeRequest('session-3', workspace)
+  }
+
   it('commits everything, pushes the branch, and opens a PR through gh', async () => {
     const repoRoot = tempRoot()
     const { git, gh, calls } = fakeCli({ repoRoot, dirty: ' M src/a.ts\n', remote: 'git@github.com:o/r.git' })
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.committed).toBe(true)
     expect(result.pushed).toBe(true)
     expect(result.prUrl).toBe('https://github.com/o/r/pull/7')
@@ -302,7 +309,7 @@ describe('WorktreeManager.mergeRequest', () => {
       git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'),
       titleFor: () => 'Fix the login crash',
     })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.prUrl).toBe('https://github.com/o/r/pull/7')
     expect(calls.some((call) => call[0] === 'commit' && call[2] === 'dsh-sbx: Fix the login crash')).toBe(true)
     const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
@@ -342,7 +349,7 @@ describe('WorktreeManager.mergeRequest', () => {
         },
       }),
     })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.renamedFrom).toMatch(/^dsh-sbx\/also-when-we-create-a-branch-[0-9a-f]{6}$/)
     expect(result.branch).toMatch(/^dsh-sbx\/name-branches-from-content-[0-9a-f]{6}$/)
     const renamed = calls.findIndex((call) => call[0] === 'branch' && call[1] === '-m')
@@ -372,7 +379,7 @@ describe('WorktreeManager.mergeRequest', () => {
         return { brief: { branchSlug: 'a-name', bullets: ['- a change'] } }
       },
     })
-    await manager.mergeRequest('session-3', repoRoot)
+    await mergeExisting(manager, repoRoot)
     expect(stagedWhenAsked).toBe(1)
     expect(calls.filter((call) => call[0] === 'add' && call[1] === '-A')).toHaveLength(2)
   })
@@ -384,7 +391,7 @@ describe('WorktreeManager.mergeRequest', () => {
     const manager = new WorktreeManager({
       git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'), brief,
     })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(calls.some((call) => call[0] === 'branch' && call[1] === '-m')).toBe(false)
     expect(calls).toContainEqual(['push', '-u', 'origin', 'dsh-sbx/session-3'])
     expect(result.renamedFrom).toBeUndefined()
@@ -399,7 +406,7 @@ describe('WorktreeManager.mergeRequest', () => {
       git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace'),
       brief: async () => ({ error: 'the subagent did not answer within 120000 ms' }),
     })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.briefError).toContain('did not answer within')
     expect(result.renamedFrom).toBeUndefined()
     expect(result.pushed).toBe(true)
@@ -418,7 +425,7 @@ describe('WorktreeManager.mergeRequest', () => {
         return { brief: { branchSlug: 'a-better-name', bullets: ['- a change'] } }
       },
     })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(asked).toBe(0)
     expect(result.branch).toBe('dsh-sbx/session-3')
     expect(calls.some((call) => call[0] === 'branch' && call[1] === '-m')).toBe(false)
@@ -428,7 +435,7 @@ describe('WorktreeManager.mergeRequest', () => {
     const repoRoot = tempRoot()
     const { git, gh, calls } = fakeCli({ repoRoot, remote: 'git@github.com:o/r.git', log: 'abc1234 work', stat: ' a.ts | 1 +' })
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    await manager.mergeRequest('session-3', repoRoot)
+    await mergeExisting(manager, repoRoot)
     const create = calls.find((call) => call[0] === 'gh' && call[1] === 'pr')!
     const body = create[create.indexOf('--body') + 1]!
     expect(body).toContain('## Commits (1)')
@@ -440,7 +447,7 @@ describe('WorktreeManager.mergeRequest', () => {
     const repoRoot = tempRoot()
     const { git, gh, calls } = fakeCli({ repoRoot, remote: 'git@github.com:o/r.git' })
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.committed).toBe(false)
     expect(result.pushed).toBe(true)
     expect(calls.some((call) => call[0] === 'commit')).toBe(false)
@@ -450,7 +457,7 @@ describe('WorktreeManager.mergeRequest', () => {
     const repoRoot = tempRoot()
     const { git, calls } = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'https://github.com/o/r.git' })
     const manager = new WorktreeManager({ git, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.pushed).toBe(true)
     expect(result.prUrl).toBeUndefined()
     expect(result.compareUrl).toBe('https://github.com/o/r/compare/dsh-sbx/session-3?expand=1')
@@ -465,7 +472,7 @@ describe('WorktreeManager.mergeRequest', () => {
       { fails: 'gh: not logged to github.com; run `gh auth login`' },
     )
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.pushed).toBe(true)
     expect(result.prUrl).toBeUndefined()
     expect(result.prError).toMatch(/not logged to github\.com/)
@@ -482,7 +489,7 @@ describe('WorktreeManager.mergeRequest', () => {
       },
     )
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.pushed).toBe(true)
     expect(result.prUrl).toBe('https://github.com/o/r/pull/9')
     expect(result.prError).toBeUndefined()
@@ -500,7 +507,7 @@ describe('WorktreeManager.mergeRequest', () => {
       { createFails: 'a pull request for branch "dsh-sbx/session-3" already exists' },
     )
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.pushed).toBe(true)
     expect(result.prUrl).toBeUndefined()
     expect(result.prError).toMatch(/already exists/)
@@ -511,7 +518,7 @@ describe('WorktreeManager.mergeRequest', () => {
     const repoRoot = tempRoot()
     const first = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'https://github.com/o/r.git' })
     const manager = new WorktreeManager({ git: first.git, gh: first.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    await manager.mergeRequest('session-3', repoRoot)
+    await mergeExisting(manager, repoRoot)
 
     const second = fakeCli({ repoRoot, branchExists: true })
     const reopened = new WorktreeManager({ git: second.git, gh: second.gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
@@ -523,7 +530,7 @@ describe('WorktreeManager.mergeRequest', () => {
     const repoRoot = tempRoot()
     const { git, gh } = fakeCli({ repoRoot, dirty: ' M a\n' })
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
-    const result = await manager.mergeRequest('session-3', repoRoot)
+    const result = await mergeExisting(manager, repoRoot)
     expect(result.committed).toBe(true)
     expect(result.pushed).toBe(false)
     expect(result.prUrl).toBeUndefined()
@@ -533,6 +540,27 @@ describe('WorktreeManager.mergeRequest', () => {
     const { git, gh } = fakeCli({ repoRoot: 'F:\\Projects\\x', notGit: true })
     const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
     await expect(manager.mergeRequest('session-3', 'F:\\Projects\\x')).rejects.toThrow(/no git worktree/)
+  })
+
+  it('will not mint a worktree for an id nobody registered', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'git@github.com:o/r.git' })
+    const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    await expect(manager.mergeRequest('stranger', repoRoot)).rejects.toThrow(/no git worktree/)
+    expect(calls.some((call) => call[0] === 'worktree')).toBe(false)
+    expect(existsSync(`${repoRoot}.worktrees`)).toBe(false)
+  })
+
+  it('re-adds a registered worktree whose directory was removed outside the plugin', async () => {
+    const repoRoot = tempRoot()
+    const { git, gh, calls } = fakeCli({ repoRoot, dirty: ' M a\n', remote: 'git@github.com:o/r.git' })
+    const manager = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths: new PathMapper('workspace', '/workspace') })
+    const worktree = manager.ensure('session-3', repoRoot)!.worktreePath
+    rmSync(worktree, { recursive: true, force: true })
+    calls.length = 0
+    const result = await manager.mergeRequest('session-3', repoRoot)
+    expect(calls.some((call) => call[0] === 'worktree' && call[1] === 'add')).toBe(true)
+    expect(result.pushed).toBe(true)
   })
 })
 
@@ -681,6 +709,7 @@ describe('WorktreeManager sync with main', () => {
   it('refuses the merge button while the worktree is mid-merge', async () => {
     const repoRoot = tempRoot()
     const { manager } = syncManager({ repoRoot, merging: true })
+    manager.ensure('session-3', repoRoot)
     await expect(manager.mergeRequest('session-3', repoRoot)).rejects.toThrow(/mid-merge with main/)
   })
 
@@ -802,6 +831,34 @@ describe('WorktreeManager extra `.git` mount', () => {
     expect(extra!.mount.containerPath).toBe(PathMapper.windowsToDrive(`${repoRoot}/.git`))
     expect(extra!.containerGitDir).toBe(PathMapper.windowsToDrive(`${repoRoot}/.git/worktrees/session-3`))
     expect(extra!.aliasHost).toBe(repoRoot)
+  })
+
+  it('locks the pointers and config surfaces a container could steer the host git with', () => {
+    const repoRoot = tempRoot()
+    const { git, gh } = fakeCli({ repoRoot })
+    const paths = new PathMapper('workspace', '/workspace')
+    const entry = new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths }).ensure('session-3', repoRoot)!
+    const common = join(repoRoot, '.git')
+    const linked = join(common, 'worktrees', 'session-3')
+    mkdirSync(join(common, 'hooks'), { recursive: true })
+    mkdirSync(linked, { recursive: true })
+    writeFileSync(join(common, 'config'), '[core]\n')
+    writeFileSync(join(common, 'gitdir'), `${join(entry.worktreePath, '.git')}\n`)
+    writeFileSync(join(linked, 'commondir'), '../\n')
+    writeFileSync(join(linked, 'gitdir'), `${join(entry.worktreePath, '.git')}\n`)
+    writeFileSync(join(linked, 'HEAD'), 'ref: refs/heads/dsh-sbx/session-3\n')
+    writeFileSync(join(entry.worktreePath, '.git'), `gitdir: ${linked}\n`)
+    new WorktreeManager({ git, gh, config: testConfig(wtConfig), paths }).lookup('session-3', repoRoot)
+    const locked = paths.extraMountFor(entry.worktreePath)!.readOnlyMounts!
+    expect(locked.map((mount) => mount.containerPath)).toEqual([
+      PathMapper.windowsToDrive(join(common, 'config')),
+      PathMapper.windowsToDrive(join(common, 'hooks')),
+      PathMapper.windowsToDrive(join(common, 'gitdir')),
+      PathMapper.windowsToDrive(join(linked, 'commondir')),
+      PathMapper.windowsToDrive(join(linked, 'gitdir')),
+      '/workspace/.git',
+    ])
+    expect(locked.map((mount) => mount.hostPath)).not.toContain(join(linked, 'HEAD'))
   })
 
   it('re-registers the mount after a restart, from the registry alone', () => {

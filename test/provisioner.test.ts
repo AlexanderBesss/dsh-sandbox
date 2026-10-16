@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Provisioner, type ProvisionerHooks } from '../src/container/provisioner.ts'
+import { buildRunArgs } from '../src/container/provisioner/run-args.ts'
 import { PathMapper } from '../src/container/paths.ts'
 import { containerNameFor } from '../src/container/session.ts'
 import { testConfig, fakeTransport, type FakeEngine } from './helpers.ts'
@@ -74,6 +75,40 @@ describe('Provisioner.runArgs', () => {
     expect(boundedArgs[boundedArgs.indexOf('--memory') + 1]).toBe('2g')
     expect(boundedArgs).toContain('--memory-swap')
     expect(boundedArgs[boundedArgs.indexOf('--memory-swap') + 1]).toBe('2g')
+  })
+
+  it('keeps the container off the host loopback unless the operator opens it', () => {
+    const { provisioner, target } = makeProvisioner()
+    const args = provisioner.runArgs(target)
+    expect(args).not.toContain('--network')
+    expect(args[args.indexOf('--add-host') + 1]).toBe('host.docker.internal:127.0.0.1')
+
+    const open = makeProvisioner({}, { allowHostLoopback: true })
+    expect(open.provisioner.runArgs(open.target)).not.toContain('--add-host')
+  })
+
+  it('applies the configured network mode', () => {
+    const { provisioner, target } = makeProvisioner({}, { networkMode: 'none' })
+    const args = provisioner.runArgs(target)
+    expect(args[args.indexOf('--network') + 1]).toBe('none')
+  })
+
+  it('binds the locked git surfaces read-only', () => {
+    const { provisioner, target, config } = makeProvisioner()
+    const paths = new PathMapper('workspace', config.containerWorkspace)
+    paths.registerExtraMount(target.workspace, {
+      mount: { hostPath: `${WINDOWS}\\.git`, containerPath: '/f/Projects/dsh-sandbox/.git' },
+      containerGitDir: '/f/Projects/dsh-sandbox/.git/worktrees/session-3',
+      gitConfig: {},
+      readOnlyMounts: [
+        { hostPath: `${WINDOWS}\\.git\\config`, containerPath: '/f/Projects/dsh-sandbox/.git/config' },
+        { hostPath: `${WINDOWS}\\.git\\hooks`, containerPath: '/f/Projects/dsh-sandbox/.git/hooks' },
+      ],
+    })
+    const args = buildRunArgs(config, paths, target)
+    expect(args).toContain('F:/Projects/dsh-sandbox/.git/config:/f/Projects/dsh-sandbox/.git/config:ro')
+    expect(args).toContain('F:/Projects/dsh-sandbox/.git/hooks:/f/Projects/dsh-sandbox/.git/hooks:ro')
+    expect(args).toContain('F:/Projects/dsh-sandbox/.git:/f/Projects/dsh-sandbox/.git')
   })
 
   it('quotes a workspace with spaces as one argv entry', () => {

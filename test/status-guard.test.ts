@@ -237,7 +237,7 @@ function resolveDepsFor(
   return {
     config,
     connection,
-    worktrees: { conflictsFor: async () => bundle },
+    worktrees: { conflictsFor: async () => bundle, lookup: () => undefined },
     resolvers,
     runs,
     ...(subagents === undefined ? {} : { subagents }),
@@ -404,12 +404,15 @@ describe('the /sandbox/api dispatch', () => {
     deps: StatusDeps,
     agents: unknown,
     headers: Record<string, string> = { host: HOST, origin: `http://${HOST}` },
+    sessions: (id: string) => unknown = (id) => (id === SESSION ? { id: SESSION, header: { cwd: WORKSPACE } } : undefined),
+    archived?: readonly string[],
   ): Promise<{ status: number; body: unknown }> {
     let handler: WebRoute['handler'] | undefined
     const ctx = {
       effect: (run: () => void) => run(),
       webServer: { register: (route: WebRoute) => { handler = route.handler; return () => {} } },
-      sessions: { get: () => ({ id: SESSION, header: { cwd: WORKSPACE } }) },
+      sessions: { get: sessions },
+      ...(archived === undefined ? {} : { get: (name: string) => (name === 'workspaceRegistry' ? { archivedSessionIds: archived } : undefined) }),
       agents,
     } as unknown as SandboxContext
     registerStatusRoute(ctx, deps)
@@ -462,6 +465,57 @@ describe('the /sandbox/api dispatch', () => {
       deps,
       { get: () => ({ id: SESSION }) },
       { host: HOST },
+    )
+    expect(answer.status).toBe(200)
+    expect(counter.starts).toBe(1)
+  })
+
+  it('refuses an action naming a session the harness does not know', async () => {
+    const counter = { starts: 0, child: 'child-1' }
+    const deps = resolveDepsFor({ entry: wtEntry, facts: midMerge }, resolverStarted(counter))
+    const answer = await dispatch('/sandbox/api/resolve-conflicts?session=stranger', deps, { get: () => ({ id: SESSION }) })
+    expect(answer.status).toBe(404)
+    expect(errorCode(answer.body)).toBe('unknown-session')
+    expect(counter.starts).toBe(0)
+  })
+
+  it('refuses a status request naming a session the harness does not know', async () => {
+    const deps = resolveDepsFor({ entry: wtEntry, facts: midMerge })
+    const answer = await dispatch('/sandbox/api?session=stranger', deps, { get: () => ({ id: SESSION }) })
+    expect(answer.status).toBe(404)
+    expect(errorCode(answer.body)).toBe('unknown-session')
+  })
+
+  it('admits an archived chat through the session guard', async () => {
+    const counter = { starts: 0, child: 'child-1' }
+    const deps = resolveDepsFor({ entry: wtEntry, facts: midMerge }, resolverStarted(counter))
+    const answer = await dispatch(
+      '/sandbox/api/resolve-conflicts?session=archived-1',
+      deps,
+      { get: () => ({ id: SESSION }) },
+      { host: HOST, origin: `http://${HOST}` },
+      () => undefined,
+      ['archived-1'],
+    )
+    expect(answer.status).toBe(200)
+    expect(counter.starts).toBe(1)
+  })
+
+  it('admits a session whose registered worktree is the only trace of it', async () => {
+    const counter = { starts: 0, child: 'child-1' }
+    const deps = {
+      ...resolveDepsFor({ entry: wtEntry, facts: midMerge }, resolverStarted(counter)),
+      worktrees: {
+        conflictsFor: async () => ({ entry: wtEntry, facts: midMerge }),
+        lookup: () => ({ sessionId: 'child-9', mainWorkspace: WORKSPACE }),
+      },
+    } as unknown as StatusDeps
+    const answer = await dispatch(
+      '/sandbox/api/resolve-conflicts?session=child-9',
+      deps,
+      { get: () => ({ id: SESSION }) },
+      { host: HOST, origin: `http://${HOST}` },
+      () => undefined,
     )
     expect(answer.status).toBe(200)
     expect(counter.starts).toBe(1)

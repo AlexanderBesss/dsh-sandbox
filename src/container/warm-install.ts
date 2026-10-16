@@ -17,9 +17,9 @@ export interface WarmInstallDeps {
   logger?: BootstrapLogger
 }
 
-export function installCommandFor(workspace: string): string | undefined {
-  if (existsSync(join(workspace, "package-lock.json"))) return "npm ci --prefer-offline"
-  return undefined
+export function installCommandFor(workspace: string, scripts = false): string | undefined {
+  if (!existsSync(join(workspace, "package-lock.json"))) return undefined
+  return scripts ? "npm ci --prefer-offline" : "npm ci --prefer-offline --ignore-scripts"
 }
 
 function runInstall(deps: WarmInstallDeps, target: SandboxTarget, command: string, onDone?: () => void): void {
@@ -60,7 +60,7 @@ export function createWarmInstall(deps: WarmInstallDeps): (target: SandboxTarget
     const entry = deps.worktrees.lookup(target.sessionId, target.workspace)
     if (entry === undefined) return
     if (existsSync(join(entry.worktreePath, "node_modules"))) return
-    const command = installCommandFor(entry.worktreePath)
+    const command = installCommandFor(entry.worktreePath, deps.config.worktreeInstallScripts.get())
     if (command === undefined) {
       deps.logger?.info?.(
         `dsh-docker-sandbox: worktree "${entry.worktreePath}" has no package-lock.json, so no warm install was run`,
@@ -75,7 +75,7 @@ export function createTreeReinstall(deps: WarmInstallDeps): (entry: WorktreeEntr
   return (entry: WorktreeEntry): void => {
     if (!deps.config.worktreeInstall.get()) return
     if (!existsSync(join(entry.worktreePath, "node_modules"))) return
-    const command = installCommandFor(entry.worktreePath)
+    const command = installCommandFor(entry.worktreePath, deps.config.worktreeInstallScripts.get())
     if (command === undefined) return
     runInstall(
       deps,

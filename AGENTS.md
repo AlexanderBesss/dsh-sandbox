@@ -1,5 +1,12 @@
 # Agent instructions
 
+## Security findings: read the ledger before re-fixing
+
+`vvah-reviews/<run>/status.md` records which VVAH findings are FIXED, MITIGATED, or OPEN,
+with the commit that closed each. Read it before re-tracing or re-fixing anything from a
+past scan — a later scan re-reports closed findings from scratch. Update the ledger in the
+same commit as any fix.
+
 ## Commits: only when asked
 
 Do not commit unless the user directly asks for it in the current request

@@ -68,6 +68,14 @@ export const Config = Schema.object({
 
   gcOnUnload: Schema.boolean().default(false),
 
+  networkMode: Schema.string().default("").volatile().description(
+    "docker --network for sandbox containers; empty keeps the engine default bridge (outbound egress), \"none\" removes egress entirely, \"host\" shares the host network and voids allowHostLoopback, any other value names a user-defined network",
+  ),
+
+  allowHostLoopback: Schema.boolean().default(false).volatile().description(
+    "let containers reach services bound to the host's own loopback; off pins host.docker.internal to the container's loopback, which is the route a container uses to reach this plugin's own API port. Name-level: a root container can still read DNS, rewrite /etc/hosts, or dial the gateway IP",
+  ),
+
   worktree: Schema.boolean().default(false).volatile(),
 
   worktreeRoot: Schema.string().default("").volatile(),
@@ -81,6 +89,10 @@ export const Config = Schema.object({
   npmCacheHost: Schema.string().default(join(homedir(), ".dsh-docker-sandbox", "npm-cache")),
 
   worktreeInstall: Schema.boolean().default(true).volatile(),
+
+  worktreeInstallScripts: Schema.boolean().default(false).volatile().description(
+    "run dependency lifecycle scripts during the automatic worktree install; off passes --ignore-scripts, so packages that need a build step need a manual npm rebuild",
+  ),
 
   warmInstallTimeoutMs: Schema.number().min(1000).default(600000),
 

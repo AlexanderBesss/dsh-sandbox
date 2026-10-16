@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
-import type { SandboxContext } from "../context.ts"
+import type { SandboxContext, WorkspaceRegistryService } from "../context.ts"
 import { containerNameFor, type SandboxTarget } from "../container/session.ts"
 import { SandboxUnavailableError } from "../container/transport.ts"
 import {
@@ -94,8 +94,19 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
           respond(400, failure("bad-request", "a session id is required"))
           return
         }
-        const headerCwd = ctx.sessions?.get?.(sessionId)?.header?.cwd
-        const workspace = typeof headerCwd === "string" && headerCwd !== "" ? headerCwd : deps.config.workspaceRoot
+        const session = ctx.sessions?.get?.(sessionId)
+        const headerCwd = session?.header?.cwd
+        const named = typeof headerCwd === "string" && headerCwd !== ""
+        const registered = named ? undefined : deps.worktrees?.lookup(sessionId, deps.config.workspaceRoot)
+        const archived = (ctx.get?.("workspaceRegistry") as WorkspaceRegistryService | undefined)
+          ?.archivedSessionIds?.includes(sessionId) === true
+        // Reject only what can be proved unknown: an id with no session, no worktree and
+        // no archive entry would otherwise mint a worktree, branch and host mount.
+        if (ctx.sessions !== undefined && session === undefined && registered === undefined && !archived) {
+          respond(404, failure("unknown-session", `no session "${sessionId}" is registered, so there is nothing to act on`))
+          return
+        }
+        const workspace = named ? headerCwd : registered?.mainWorkspace ?? deps.config.workspaceRoot
         const actionHandler = ACTIONS.get(action)
         if (actionHandler === undefined) {
           await respondStatus(respond, deps, sessionId, workspace)

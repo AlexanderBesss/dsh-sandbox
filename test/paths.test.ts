@@ -93,6 +93,11 @@ describe('PathMapper.toContainer (workspace mode)', () => {
       expect((error as SandboxPathError).code).toBe('PATH_OUTSIDE_SANDBOX')
     }
   })
+
+  it('rejects an absolute path whose ".." segments leave the mount', () => {
+    expect(() => mapper.toContainer('/workspace/../../etc/passwd', WINDOWS)).toThrow(/outside the sandbox mount/)
+    expect(() => mapper.toContainer(`${WINDOWS}\\..\\..\\Windows\\system32`, WINDOWS)).toThrow(/outside the sandbox mount/)
+  })
 })
 
 describe('PathMapper.toContainer (drives mode)', () => {
@@ -109,6 +114,15 @@ describe('PathMapper.toContainer (drives mode)', () => {
 
   it('still rejects a path on no mount at all', () => {
     expect(() => mapper.toContainer('/etc/passwd', WINDOWS)).toThrowError(SandboxPathError)
+  })
+
+  it('rejects a drive that was never mounted', () => {
+    expect(() => mapper.toContainer('/d/tmp/x', WINDOWS)).toThrow(/outside the sandbox mount/)
+    expect(mapper.toWindows('/d/tmp/x', WINDOWS)).toBeUndefined()
+  })
+
+  it('rejects a mounted drive path whose ".." segments climb above the drive', () => {
+    expect(() => mapper.toContainer('/c/../../Windows/x', WINDOWS)).toThrow(/outside the sandbox mount/)
   })
 })
 

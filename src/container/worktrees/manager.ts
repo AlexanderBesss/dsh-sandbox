@@ -166,7 +166,9 @@ export class WorktreeManager {
   }
 
   async mergeRequest(sessionId: string, workspace: string): Promise<MergeRequestResult> {
-    const entry = this.ensure(sessionId, workspace)
+    // lookup, not ensure: an id nobody registered must not mint a worktree, a branch
+    // and a host bind mount.
+    const entry = this.lookup(sessionId, workspace)
     if (entry === undefined) {
       const why = this.failures.get(sessionId)
       throw new CliCommandError(
@@ -176,6 +178,9 @@ export class WorktreeManager {
         why,
       )
     }
+    // A registered entry whose directory was removed outside the plugin would otherwise
+    // die as a spawn ENOENT from git; verify() re-adds it from the branch it tracks.
+    this.verify(entry)
 
     if (await isMerging(this.deps.git, entry.worktreePath)) {
       throw new CliCommandError(

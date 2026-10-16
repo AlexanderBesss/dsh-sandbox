@@ -2,8 +2,8 @@ import type { SandboxConfig } from "../../config.ts"
 import type { PathMapper, SandboxMount } from "../paths.ts"
 import { COMPOSE_PROJECT_LABEL, composeProjectFor, OWNERSHIP_LABEL, SESSION_LABEL, type SandboxTarget } from "../session.ts"
 
-function volumeArg(mount: SandboxMount): string {
-  return `${mount.hostPath.replace(/\\/g, "/")}:${mount.containerPath}`
+function volumeArg(mount: SandboxMount, readOnly = false): string {
+  return `${mount.hostPath.replace(/\\/g, "/")}:${mount.containerPath}${readOnly ? ":ro" : ""}`
 }
 
 export function buildRunArgs(config: SandboxConfig, paths: PathMapper, target: SandboxTarget): string[] {
@@ -43,7 +43,12 @@ export function buildRunArgs(config: SandboxConfig, paths: PathMapper, target: S
         args.push("-e", `GIT_CONFIG_KEY_${index}=${key}`, "-e", `GIT_CONFIG_VALUE_${index}=${value}`)
       })
     }
+    for (const locked of extra.readOnlyMounts ?? []) args.push("-v", volumeArg(locked, true))
   }
+
+  const network = config.networkMode.get()
+  if (network !== "") args.push("--network", network)
+  if (!config.allowHostLoopback.get()) args.push("--add-host", "host.docker.internal:127.0.0.1")
 
   const limits = config.resourceLimits
   const cpu = limits?.cpu.get()

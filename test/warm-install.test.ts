@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { createWarmInstall, installCommandFor } from '../src/container/warm-install.ts'
+import { createTreeReinstall, createWarmInstall, installCommandFor } from '../src/container/warm-install.ts'
 import type { WorktreeEntry } from '../src/container/worktrees.ts'
 import { testConfig, fakeTransport } from './helpers.ts'
 
@@ -56,20 +56,24 @@ function harness(options: {
   const worktrees = {
     lookup: () => options.entry,
   } as never
-  const warm = createWarmInstall({
+  const deps = {
     transport,
     provisioner,
     worktrees,
     config: options.config ?? testConfig({ worktree: true }),
-  })
-  return { warm, state }
+  } as never
+  return { warm: createWarmInstall(deps), reinstall: createTreeReinstall(deps), state }
 }
 
 const target = { sessionId: 'session-3', container: 'dsh-sbx-session-3', workspace: worktreePath, shared: false }
 
 describe('installCommandFor', () => {
-  it('pins a package-lock.json workspace to npm ci', () => {
-    expect(installCommandFor(worktreePath)).toBe('npm ci --prefer-offline')
+  it('pins a package-lock.json workspace to npm ci without lifecycle scripts', () => {
+    expect(installCommandFor(worktreePath)).toBe('npm ci --prefer-offline --ignore-scripts')
+  })
+
+  it('keeps lifecycle scripts only when the operator opts in', () => {
+    expect(installCommandFor(worktreePath, true)).toBe('npm ci --prefer-offline')
   })
 
   it('names no command for a workspace without a lockfile', () => {
@@ -84,8 +88,18 @@ describe('createWarmInstall', () => {
     const { warm, state } = harness({ entry: entry(worktreePath) })
     warm(target)
     await vi.waitFor(() => expect(state.leases.released).toBe(1))
-    expect(state.runs[0]?.argv).toEqual(['/bin/sh', '-lc', 'npm ci --prefer-offline'])
+    expect(state.runs[0]?.argv).toEqual(['/bin/sh', '-lc', 'npm ci --prefer-offline --ignore-scripts'])
     expect(state.leases.began).toBe(1)
+  })
+
+  it('keeps lifecycle scripts only when the operator opts in through config', async () => {
+    const { warm, state } = harness({
+      entry: entry(worktreePath),
+      config: testConfig({ worktree: true, worktreeInstallScripts: true }),
+    })
+    warm(target)
+    await vi.waitFor(() => expect(state.leases.released).toBe(1))
+    expect(state.runs[0]?.argv).toEqual(['/bin/sh', '-lc', 'npm ci --prefer-offline'])
   })
 
   it('leaves a worktree that already has node_modules alone', async () => {
@@ -125,5 +139,36 @@ describe('createWarmInstall', () => {
     warm(target)
     await vi.waitFor(() => expect(state.leases.released).toBe(1))
     expect(state.leases.began).toBe(1)
+  })
+})
+
+describe('createTreeReinstall', () => {
+  it('reinstalls a worktree that has node_modules, without lifecycle scripts', async () => {
+    const reinstalled = join(root, 'reinstalled')
+    mkdirSync(join(reinstalled, 'node_modules'), { recursive: true })
+    writeFileSync(join(reinstalled, 'package-lock.json'), '{"lockfileVersion":3}')
+    const { reinstall, state } = harness({ entry: entry(reinstalled) })
+    reinstall(entry(reinstalled))
+    await vi.waitFor(() => expect(state.runs).toHaveLength(1))
+    expect(state.runs[0]?.argv).toEqual(['/bin/sh', '-lc', 'npm ci --prefer-offline --ignore-scripts'])
+  })
+
+  it('honours the scripts opt-in through config', async () => {
+    const opted = join(root, 'opted')
+    mkdirSync(join(opted, 'node_modules'), { recursive: true })
+    writeFileSync(join(opted, 'package-lock.json'), '{"lockfileVersion":3}')
+    const { reinstall, state } = harness({
+      entry: entry(opted),
+      config: testConfig({ worktree: true, worktreeInstallScripts: true }),
+    })
+    reinstall(entry(opted))
+    await vi.waitFor(() => expect(state.runs).toHaveLength(1))
+    expect(state.runs[0]?.argv).toEqual(['/bin/sh', '-lc', 'npm ci --prefer-offline'])
+  })
+
+  it('skips a worktree with nothing installed to redo', () => {
+    const { reinstall, state } = harness({ entry: entry(worktreePath) })
+    reinstall(entry(worktreePath))
+    expect(state.runs).toHaveLength(0)
   })
 })

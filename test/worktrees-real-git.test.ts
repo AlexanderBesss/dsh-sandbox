@@ -126,6 +126,7 @@ describe.skipIf(!hasGit)('WorktreeManager.mergeRequest against real git', () => 
       }),
     })
 
+    manager.ensure('session-3', repo)
     const first = await manager.mergeRequest('session-3', repo)
     expect(first.renamedFrom).toBeDefined()
     writeFileSync(join(first.worktreePath, 'more.ts'), 'export const more = 1\n')

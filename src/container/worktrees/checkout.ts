@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SandboxConfig } from "../../config.ts"
 import type { CliRunner } from "../git.ts"
-import { PathMapper } from "../paths.ts"
+import { PathMapper, type SandboxMount } from "../paths.ts"
 import { slugDigest } from "../session.ts"
 import { ADD_MS, QUICK_MS } from "./constants.ts"
 import { tryGitSync } from "./probes.ts"
@@ -66,7 +66,36 @@ export function registerMount(paths: PathMapper, entry: WorktreeEntry): void {
     containerGitDir: PathMapper.windowsToDrive(entry.hostGitDir),
     gitConfig: entry.gitConfig,
     aliasHost: entry.mainWorkspace,
+    readOnlyMounts: lockGitSurfaces(paths, entry),
   })
+}
+
+// The gitdir mount has to stay writable for the container's own git, so the surfaces
+// a container could use to steer the *host's* git are overlaid read-only instead.
+// commondir and gitdir are the pointers that decide *which* gitdir a worktree reads:
+// leaving them writable lets a container relocate the whole config surface that the
+// rest of this list locks, and <worktree>/.git is the same pointer from the other side.
+const LOCKED_GIT_SURFACES = ["config", "config.worktree", "hooks", "info", "commondir", "gitdir"] as const
+
+export function lockGitSurfaces(paths: PathMapper, entry: WorktreeEntry): SandboxMount[] {
+  const locked: SandboxMount[] = []
+  for (const dir of [`${trimTrailingSeparators(entry.repoRoot)}/.git`, entry.hostGitDir]) {
+    const root = trimTrailingSeparators(dir)
+    if (root === "") continue
+    for (const name of LOCKED_GIT_SURFACES) {
+      const hostPath = `${root}/${name}`
+      if (!existsSync(hostPath)) continue
+      locked.push({ hostPath, containerPath: PathMapper.windowsToDrive(hostPath) })
+    }
+  }
+  const dotGit = join(entry.worktreePath, ".git")
+  if (existsSync(dotGit)) {
+    const worktreeRoot = paths.mode === "drives"
+      ? PathMapper.windowsToDrive(entry.worktreePath)
+      : paths.containerRoot(entry.worktreePath)
+    locked.push({ hostPath: dotGit, containerPath: `${worktreeRoot}/.git` })
+  }
+  return locked
 }
 
 export function lockfileHash(worktreePath: string): string | undefined {

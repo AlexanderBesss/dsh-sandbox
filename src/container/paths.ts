@@ -24,6 +24,7 @@ export interface ExtraMount {
   containerGitDir: string
   gitConfig: Record<string, string>
   aliasHost?: string
+  readOnlyMounts?: SandboxMount[]
 }
 
 export class SandboxPathError extends Error {
@@ -118,26 +119,43 @@ export class PathMapper {
   }
 
   private resolveMountedPath(raw: string, workspace: string, root: string): string | undefined {
-    if (this.mode === "drives" && /^\/[a-z](\/|$)/i.test(raw)) {
-      return resolveSegments(`/${raw[1]!.toLowerCase()}${raw.slice(2)}`)
+    // Collapse before testing containment: a prefix test on an un-collapsed path
+    // passes for "/workspace/../../etc/passwd", and the kernel resolves ".." later.
+    const collapsed = resolveSegments(raw)
+
+    if (this.mode === "drives") {
+      const drive = /^\/([a-z])(\/.*)?$/i.exec(collapsed)
+      if (drive === null) return undefined
+      const containerRoot = `/${drive[1]!.toLowerCase()}`
+      const mounted = this.mountsFor(workspace).some((mount) => mount.containerPath === containerRoot)
+      return mounted ? `${containerRoot}${drive[2] ?? ""}` : undefined
     }
+
     if (this.mode === "workspace") {
       const driveRoot = windowsToDrivePath(workspace)
-      if (isUnder(raw, driveRoot)) return resolveSegments(`${root}${raw.slice(driveRoot.length)}`)
+      if (isUnder(collapsed, driveRoot)) {
+        const mapped = resolveSegments(`${root}${collapsed.slice(driveRoot.length)}`)
+        return isUnder(mapped, root) ? mapped : undefined
+      }
     }
-    if (isUnder(raw, root)) return resolveSegments(raw)
+
+    if (isUnder(collapsed, root)) return collapsed
 
     const extra = this.extraMounts.get(normalize(workspace))
     if (extra === undefined) return undefined
     const mounted = extra.mount.containerPath
-    if (isUnder(raw, mounted)) return resolveSegments(raw)
+    if (isUnder(collapsed, mounted)) return collapsed
     const hostDrive = windowsToDrivePath(extra.mount.hostPath)
-    if (isUnder(raw, hostDrive)) return resolveSegments(`${mounted}${raw.slice(hostDrive.length)}`)
+    if (isUnder(collapsed, hostDrive)) {
+      const mapped = resolveSegments(`${mounted}${collapsed.slice(hostDrive.length)}`)
+      return isUnder(mapped, mounted) ? mapped : undefined
+    }
     if (extra.aliasHost !== undefined) {
       const aliasDrive = windowsToDrivePath(extra.aliasHost)
-      if (raw === aliasDrive) return resolveSegments(root)
-      if (raw.startsWith(`${aliasDrive}/`)) {
-        return resolveSegments(`${root}${raw.slice(aliasDrive.length)}`)
+      if (collapsed === aliasDrive) return resolveSegments(root)
+      if (isUnder(collapsed, aliasDrive)) {
+        const mapped = resolveSegments(`${root}${collapsed.slice(aliasDrive.length)}`)
+        return isUnder(mapped, root) ? mapped : undefined
       }
     }
     return undefined
@@ -155,6 +173,10 @@ export class PathMapper {
       if (!isUnder(raw, root)) return undefined
       return `${hostToWindows(normalize(this.workspaceHostPath(workspace)))}${windowsSuffix(raw, root)}`
     }
+    const drive = /^\/([a-z])(\/.*)?$/i.exec(raw)
+    if (drive === null) return undefined
+    const containerRoot = `/${drive[1]!.toLowerCase()}`
+    if (!this.mountsFor(workspace).some((mount) => mount.containerPath === containerRoot)) return undefined
     return driveToWindowsPath(raw)
   }
 

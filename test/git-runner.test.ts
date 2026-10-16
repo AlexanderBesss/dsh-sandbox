@@ -338,4 +338,11 @@ describe.skipIf(!hasGit)('the hardened runner against real git', () => {
     git('config', 'include.path', join(base, 'evil.gitconfig').replace(/\\/g, '/'))
     expect(() => createCliRunner(['git'], 'git').runSync(['status', '--porcelain'], { cwd: repo })).toThrow(/include\.path/)
   })
+
+  it('refuses a gitdir-scoped include, whose condition is attacker-chosen', () => {
+    const { base, repo, git } = tempRepo('includeif')
+    writeFileSync(join(base, 'evil.gitconfig'), '[filter "evil"]\n\tclean = !touch marker\n')
+    git('config', 'includeif.gitdir:/x.path', join(base, 'evil.gitconfig').replace(/\\/g, '/'))
+    expect(() => createCliRunner(['git'], 'git').runSync(['status', '--porcelain'], { cwd: repo })).toThrow(/includeif\./)
+  })
 })
