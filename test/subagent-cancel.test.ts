@@ -90,12 +90,13 @@ async function flush(): Promise<void> {
   for (let turn = 0; turn < 10; turn += 1) await Promise.resolve()
 }
 
-function reviewDeps(subagents: () => unknown, runs = createSubagentRunRegistry()): StatusDeps {
+function reviewDeps(subagents: () => unknown, runs = createSubagentRunRegistry(), resolvers = createResolverGuard()): StatusDeps {
   return {
     config: testConfig(),
     connection: { admit: () => ({ peer: {} }) },
     worktrees: { reviewFor: async () => ({ entry: wtEntry, changes }), info: async () => undefined, failureFor: () => undefined },
     runs,
+    resolvers,
     subagents,
   } as unknown as StatusDeps
 }
@@ -259,6 +260,26 @@ describe('the review and resolver runs share one registry with the status endpoi
 
     await flush()
     expect(runs.running(SESSION)).toEqual([])
+  })
+
+  it('frees the review slot when a cancelled review settles', async () => {
+    const started: Started[] = []
+    const runs = createSubagentRunRegistry()
+    const deps = reviewDeps(cancellableSubagents(started), runs)
+    const { ctx } = idleParent()
+    const { replies, respond } = capture()
+
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    expect(replies[0]!.status).toBe(200)
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    expect(errorCode(replies[1]!.body)).toBe('review-running')
+
+    await handleCancelSubagent(respond, deps, SESSION, 'review', true)
+    await flush()
+
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    expect(replies[3]!.status).toBe(200)
+    expect(started).toHaveLength(2)
   })
 
   it('posts the stopped notice to the chat and frees the worktree for another resolver', async () => {

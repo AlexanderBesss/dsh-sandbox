@@ -40,9 +40,13 @@ export async function probeBootstrap(transport: DockerTransport, target: Sandbox
 
 export type RipgrepSource = "package" | "url" | "none"
 
+// GitHub release assets are mutable, so the url branch verifies the tarball
+// against the upstream sha256 before extracting into /usr/local/bin as root.
 export function ripgrepInstallCommand(source: RipgrepSource): string {
   return source === "url"
-    ? "wget -qO- https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz | tar xz -C /usr/local/bin --strip-components=1"
+    ? "wget -qO /tmp/dsh-rg.tgz https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz "
+      + "&& echo '4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e  /tmp/dsh-rg.tgz' | sha256sum -c - >/dev/null "
+      + "&& tar xzf /tmp/dsh-rg.tgz -C /usr/local/bin --strip-components=1 && rm -f /tmp/dsh-rg.tgz"
     : "if [ -f /etc/alpine-release ]; then apk add --no-cache ripgrep; "
       + "elif command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq ripgrep; "
       + "elif command -v dnf >/dev/null 2>&1; then dnf install -y -q ripgrep; "

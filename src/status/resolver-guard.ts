@@ -1,7 +1,8 @@
-// A resolver mutates the worktree, so only one may run per session at a time.
-// The slot expires on its own: a child whose result never settles must not lock
-// the button for the rest of the session. A slot releases only its own entry, so
-// a resolver that outlived the expiry cannot free whoever replaced it.
+// A subagent kind holds one slot key per session at a time: a resolver mutates
+// the worktree, and a fan-out of review children would swamp the session. The
+// slot expires on its own: a child whose result never settles must not lock the
+// button for the rest of the session. A slot releases only its own entry, so a
+// run that outlived the expiry cannot free whoever replaced it.
 const RESOLVER_TTL_MS = 15 * 60_000
 
 export interface ResolverSlot {
@@ -9,22 +10,22 @@ export interface ResolverSlot {
 }
 
 export interface ResolverGuard {
-  tryStart(sessionId: string): ResolverSlot | undefined
+  tryStart(key: string): ResolverSlot | undefined
 }
 
 export function createResolverGuard(now: () => number = Date.now): ResolverGuard {
   const held = new Map<string, ResolverSlot & { expiresAt: number }>()
   return {
-    tryStart: (sessionId) => {
-      const previous = held.get(sessionId)
+    tryStart: (key) => {
+      const previous = held.get(key)
       if (previous !== undefined && previous.expiresAt > now()) return undefined
       const slot: ResolverSlot & { expiresAt: number } = {
         expiresAt: now() + RESOLVER_TTL_MS,
         release: () => {
-          if (held.get(sessionId) === slot) held.delete(sessionId)
+          if (held.get(key) === slot) held.delete(key)
         },
       }
-      held.set(sessionId, slot)
+      held.set(key, slot)
       return slot
     },
   }

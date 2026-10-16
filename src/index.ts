@@ -105,6 +105,7 @@ export function apply(ctx: SandboxContext, config: SandboxConfig): void {
     subagents: () => subagents,
     resolvers: createResolverGuard(),
     runs,
+    logger: ctx.logger,
   })
 
   const releaseSession = (sessionId: string): void => {

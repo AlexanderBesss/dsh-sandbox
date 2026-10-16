@@ -138,9 +138,15 @@ describe('handleReview', () => {
   }
   const changes = { log: 'abc123 fix', status: '', diff: '+x', truncated: false }
 
-  function depsFor(bundle: unknown, subagents?: () => unknown, runs = createSubagentRunRegistry()): StatusDeps {
+  function depsFor(
+    bundle: unknown,
+    subagents?: () => unknown,
+    runs = createSubagentRunRegistry(),
+    resolvers = createResolverGuard(),
+  ): StatusDeps {
     return {
       worktrees: { reviewFor: async () => bundle },
+      resolvers,
       runs,
       ...(subagents === undefined ? {} : { subagents }),
     } as unknown as StatusDeps
@@ -202,6 +208,79 @@ describe('handleReview', () => {
     expect(replies[0]!.status).toBe(200)
     expect((replies[0]!.body as { data: unknown }).data).toEqual({ provider: 'inline', childSessionId: 'child-1' })
     expect(started).toEqual([{ provider: 'inline', label: 'code review' }])
+  })
+
+  it('refuses a second review while one is already running', async () => {
+    const ctx = { agents: { get: () => ({ id: SESSION }) } } as unknown as SandboxContext
+    let starts = 0
+    const subagents = () => ({
+      list: () => ['inline'],
+      start: async () => {
+        starts += 1
+        return { localAgent: { session: { id: `child-${starts}` } }, result: new Promise<never>(() => {}) }
+      },
+    })
+    const deps = depsFor({ entry, changes }, subagents)
+    const { replies, respond } = capture()
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    expect(starts).toBe(1)
+    expect(replies[0]!.status).toBe(200)
+    expect(replies[1]!.status).toBe(409)
+    expect(errorCode(replies[1]!.body)).toBe('review-running')
+  })
+
+  it('frees the review slot once the first review settles', async () => {
+    const ctx = { agents: { get: () => ({ id: SESSION }) } } as unknown as SandboxContext
+    let starts = 0
+    const subagents = () => ({
+      list: () => ['inline'],
+      start: async () => {
+        starts += 1
+        return {
+          localAgent: { session: { id: `child-${starts}` } },
+          result: Promise.resolve({ stopReason: 'completed', output: [] }),
+        }
+      },
+    })
+    const deps = depsFor({ entry, changes }, subagents)
+    const { replies, respond } = capture()
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve()
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    expect(starts).toBe(2)
+    expect(replies[1]!.status).toBe(200)
+  })
+
+  it('a review slot and a resolver slot do not block each other', async () => {
+    const ctx = { agents: { get: () => ({ id: SESSION }) } } as unknown as SandboxContext
+    let starts = 0
+    const subagents = () => ({
+      list: () => ['inline'],
+      start: async () => {
+        starts += 1
+        return { localAgent: { session: { id: `child-${starts}` } }, result: new Promise<never>(() => {}) }
+      },
+    })
+    const deps = {
+      worktrees: {
+        reviewFor: async () => ({ entry, changes }),
+        conflictsFor: async () => ({ entry: wtEntry, facts: midMerge }),
+      },
+      resolvers: createResolverGuard(),
+      runs: createSubagentRunRegistry(),
+      subagents,
+    } as unknown as StatusDeps
+    const { replies, respond } = capture()
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    await handleResolveConflicts(respond, ctx, deps, SESSION, WORKSPACE, true)
+    expect(replies[0]!.status).toBe(200)
+    expect(replies[1]!.status).toBe(200)
+    await handleReview(respond, ctx, deps, SESSION, WORKSPACE, true)
+    await handleResolveConflicts(respond, ctx, deps, SESSION, WORKSPACE, true)
+    expect(starts).toBe(2)
+    expect(errorCode(replies[2]!.body)).toBe('review-running')
+    expect(errorCode(replies[3]!.body)).toBe('resolver-running')
   })
 })
 
@@ -564,7 +643,7 @@ describe('the /sandbox/api dispatch', () => {
 })
 
 describe('createResolverGuard', () => {
-  it('holds one slot per session until it is released', () => {
+  it('holds one slot per key until it is released', () => {
     const guard = createResolverGuard()
     expect(guard.tryStart('a')).toBeDefined()
     expect(guard.tryStart('a')).toBeUndefined()

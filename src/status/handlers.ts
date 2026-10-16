@@ -19,6 +19,7 @@ export interface StatusDeps {
   subagents?: () => SubagentService | undefined
   resolvers: ResolverGuard
   runs: SubagentRunRegistry
+  logger?: { warn?: (...args: unknown[]) => void }
 }
 
 export async function handleMergeRequest(
@@ -129,6 +130,11 @@ export async function handleReview(
   }
   const launch = subagentLaunch(respond, ctx, deps, sessionId)
   if (launch === undefined) return
+  const slot = deps.resolvers.tryStart(`review:${sessionId}`)
+  if (slot === undefined) {
+    respond(409, failure("review-running", "a review is already running for this session; its report lands in the chat when it finishes"))
+    return
+  }
   const childSessionId = await startSubagentRun({
     ctx,
     deps,
@@ -137,6 +143,7 @@ export async function handleReview(
     kind: "review",
     label: "code review",
     prompt: buildReviewPrompt(bundle.entry, bundle.changes),
+    slot,
   })
   respond(200, { ok: true, data: { provider: launch.provider, childSessionId } })
 }
@@ -173,7 +180,7 @@ export async function handleResolveConflicts(
     ))
     return
   }
-  const slot = deps.resolvers.tryStart(sessionId)
+  const slot = deps.resolvers.tryStart(`resolve:${sessionId}`)
   if (slot === undefined) {
     respond(409, failure("resolver-running", "a resolver is already working on this worktree; its report lands in the chat when it finishes"))
     return

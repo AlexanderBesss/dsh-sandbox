@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { SandboxContext, WorkspaceRegistryService } from "../context.ts"
+import { CliCommandError } from "../container/git/runner.ts"
 import { containerNameFor, type SandboxTarget } from "../container/session.ts"
 import { SandboxUnavailableError } from "../container/transport.ts"
 import {
@@ -15,6 +16,7 @@ import { subagentViews } from "./run-registry.ts"
 
 const ROUTE_PATH = "/sandbox/api"
 const ACTION_OFFSET = ROUTE_PATH.length + 1
+const MAX_WIRE_MESSAGE = 500
 
 interface StatusCall {
   respond: Respond
@@ -107,15 +109,23 @@ export function registerStatusRoute(ctx: SandboxContext, deps: StatusDeps): void
           return
         }
         const workspace = named ? headerCwd : registered?.mainWorkspace ?? deps.config.workspaceRoot
+        if (action === "" || action === "status") {
+          await respondStatus(respond, deps, sessionId, workspace)
+          return
+        }
         const actionHandler = ACTIONS.get(action)
         if (actionHandler === undefined) {
-          await respondStatus(respond, deps, sessionId, workspace)
+          respond(400, failure("unknown-action", `unknown action "${action}"`))
           return
         }
         await actionHandler({ respond, ctx, deps, sessionId, workspace, params: url.searchParams, isPost })
       } catch (error) {
-        const code = error instanceof SandboxUnavailableError ? error.code : "unknown"
-        respond(500, error instanceof Error ? failure(code, error.message) : { ok: false, error: { code } })
+        if (error instanceof SandboxUnavailableError || error instanceof CliCommandError) {
+          respond(500, failure(error.code, error.message.slice(0, MAX_WIRE_MESSAGE)))
+          return
+        }
+        deps.logger?.warn?.(`dsh-docker-sandbox: status request failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+        respond(500, failure("unknown", "the request failed unexpectedly; the plugin log has the details"))
       }
     },
   }), "dsh-docker-sandbox: status route")
